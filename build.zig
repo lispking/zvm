@@ -4,7 +4,25 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Embed git commit hash at build time
+    // Embed version and git commit hash at build time
+    const version = b.option(
+        []const u8,
+        "version",
+        "Semantic version (e.g. 0.2.0). In CI, pass the git tag. Locally defaults to git describe or \"dev\".",
+    ) orelse blk: {
+        const tag = std.process.Child.run(.{
+            .allocator = b.allocator,
+            .argv = &.{ "git", "describe", "--tags", "--abbrev=0" },
+        }) catch break :blk "0.1.0";
+        switch (tag.term) {
+            .Exited => |code| if (code != 0) break :blk "0.1.0",
+            else => break :blk "0.1.0",
+        }
+        const trimmed = std.mem.trim(u8, tag.stdout, " \n\r");
+        if (trimmed.len == 0) break :blk "0.1.0";
+        break :blk if (trimmed[0] == 'v') trimmed[1..] else trimmed;
+    };
+
     const git_commit = blk: {
         const result = std.process.Child.run(.{
             .allocator = b.allocator,
@@ -23,6 +41,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
     options.addOption([]const u8, "git_commit", git_commit);
     exe.root_module.addOptions("build_options", options);
 

@@ -51,7 +51,9 @@ jobs:
           version: '0.15.2'
 
       - name: Build
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion="$VERSION"
         shell: bash
 
       - name: Package versioned (Unix)

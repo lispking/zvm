@@ -11,8 +11,8 @@ const errors = @import("errors.zig");
 const platform = @import("platform.zig");
 const build_options = @import("build_options");
 
-/// Current version of zvm (without 'v' prefix for comparison).
-const VERSION = "0.1.0";
+/// Current version of zvm, injected at build time from git tag or -Dversion=.
+const VERSION = build_options.version;
 
 /// Full version string with 'v' prefix and git commit hash.
 fn fullVersion() []const u8 {

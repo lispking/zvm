@@ -175,8 +175,12 @@ pub fn run(
     };
 
     // Download the release archive
-    var archive_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/zvm-update.tar.gz", .{zvm.base_dir});
+    var buf1: [std.fs.max_path_bytes * 2]u8 = undefined;
+    const self_dir = try std.fmt.bufPrint(&buf1, "{s}/self", .{zvm.base_dir});
+    std.fs.cwd().makePath(self_dir) catch {};
+
+    var buf2: [std.fs.max_path_bytes * 2]u8 = undefined;
+    const archive_path = try std.fmt.bufPrint(&buf2, "{s}/zvm-update.tar.gz", .{self_dir});
 
     try stdout.print("Downloading {s}...\n", .{latest_version});
     try stdout.flush();
@@ -189,7 +193,7 @@ pub fn run(
 
     const result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "tar", "-xf", archive_path, "-C", zvm.base_dir },
+        .argv = &.{ "tar", "-xf", archive_path, "-C", self_dir },
     }) catch {
         try terminal.printError(stderr, "Failed to extract update");
         return;
@@ -198,7 +202,7 @@ pub fn run(
     defer allocator.free(result.stderr);
 
     // Find the extracted binary and replace the current installation
-    var dir = std.fs.cwd().openDir(zvm.base_dir, .{ .iterate = true }) catch return;
+    var dir = std.fs.cwd().openDir(self_dir, .{ .iterate = true }) catch return;
     defer dir.close();
 
     // Platform-specific binary name
@@ -218,7 +222,7 @@ pub fn run(
                 const dst = try std.fmt.bufPrint(&dst_buf, "{s}/{s}", .{ install_dir, exe_name });
 
                 var src_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-                const src = try std.fmt.bufPrint(&src_buf, "{s}/{s}", .{ zvm.base_dir, exe_name });
+                const src = try std.fmt.bufPrint(&src_buf, "{s}/{s}", .{ self_dir, exe_name });
 
                 // Stream-copy the new binary over the old one
                 const src_file = std.fs.cwd().openFile(src, .{}) catch continue;
