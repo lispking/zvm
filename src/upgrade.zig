@@ -214,20 +214,41 @@ pub fn run(
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .file and std.mem.eql(u8, entry.name, exe_name)) {
-            // Determine where the current zvm is installed (ZVM_INSTALL env var)
-            const zvm_install = std.process.getEnvVarOwned(allocator, "ZVM_INSTALL") catch null;
-            if (zvm_install) |install_dir| {
-                defer allocator.free(install_dir);
+            // Find the current zvm binary path to determine install directory.
+            // Prefer ZVM_INSTALL env var, fall back to /proc/self/exe (Linux)
+            // or the executable path from std.fs.
+            const install_dir = blk: {
+                if (std.process.getEnvVarOwned(allocator, "ZVM_INSTALL")) |env_dir| {
+                    break :blk env_dir;
+                } else |_| {
+                    // Resolve the directory of the currently running executable
+                    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+                    const exe_path = std.fs.selfExePath(&exe_buf) catch break :blk null;
+                    if (std.fs.path.dirname(exe_path)) |dir_path| {
+                        break :blk allocator.dupe(u8, dir_path) catch null;
+                    }
+                    break :blk null;
+                }
+            };
+
+            if (install_dir) |inst_dir| {
+                defer allocator.free(inst_dir);
                 var dst_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-                const dst = try std.fmt.bufPrint(&dst_buf, "{s}/{s}", .{ install_dir, exe_name });
+                const dst = try std.fmt.bufPrint(&dst_buf, "{s}/{s}", .{ inst_dir, exe_name });
 
                 var src_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
                 const src = try std.fmt.bufPrint(&src_buf, "{s}/{s}", .{ self_dir, exe_name });
 
                 // Stream-copy the new binary over the old one
-                const src_file = std.fs.cwd().openFile(src, .{}) catch continue;
+                const src_file = std.fs.cwd().openFile(src, .{}) catch {
+                    try terminal.printError(stderr, "Failed to read extracted binary");
+                    break;
+                };
                 defer src_file.close();
-                const dst_file = std.fs.cwd().createFile(dst, .{}) catch continue;
+                const dst_file = std.fs.cwd().createFile(dst, .{}) catch {
+                    try terminal.printError(stderr, "Failed to write to install directory");
+                    break;
+                };
                 defer dst_file.close();
 
                 var src_reader_buf: [8192]u8 = undefined;
@@ -235,16 +256,23 @@ pub fn run(
                 var dst_writer_buf: [8192]u8 = undefined;
                 var dst_writer = dst_file.writer(&dst_writer_buf);
 
-                _ = src_reader.interface.streamRemaining(&dst_writer.interface) catch continue;
+                _ = src_reader.interface.streamRemaining(&dst_writer.interface) catch {
+                    try terminal.printError(stderr, "Failed to copy binary");
+                    break;
+                };
                 try dst_writer.interface.flush();
 
                 // Make the new binary executable (Unix)
-                _ = std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &.{ "chmod", "+x", dst },
-                }) catch {};
+                if (builtin.os.tag != .windows) {
+                    _ = std.process.Child.run(.{
+                        .allocator = allocator,
+                        .argv = &.{ "chmod", "+x", dst },
+                    }) catch {};
+                }
 
                 try terminal.printSuccess(stdout, "Updated zvm to latest version!");
+            } else {
+                try terminal.printError(stderr, "Could not determine install directory");
             }
             break;
         }
