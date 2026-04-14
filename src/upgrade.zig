@@ -315,6 +315,8 @@ pub fn run(
     std.fs.cwd().deleteFile(old_path) catch {};
 
     try terminal.printSuccess(stdout, "Updated zvm to latest version!");
+    try stdout.print("Now running zvm {s}\n", .{latest_version});
+    try stdout.flush();
 
     // Clean up the downloaded archive
     std.fs.cwd().deleteFile(archive_path) catch {};

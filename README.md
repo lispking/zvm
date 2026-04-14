@@ -111,6 +111,7 @@ zvm upgrade
 | `upgrade` | | Upgrade zvm to the latest version |
 | `vmu` | | Set version map source (zig/zls) |
 | `mirrorlist` | | Set mirror distribution server |
+| `proxy` | | Set HTTP/HTTPS proxy for downloads |
 | `completion` | | Generate shell completion script |
 | `version` | `-v` | Print zvm version |
 | `help` | `-h` | Print help message |
@@ -178,6 +179,24 @@ zvm mirrorlist https://example.com/mirrors.txt
 zvm mirrorlist
 ```
 
+### Proxy
+
+Configure HTTP/HTTPS proxy for all network operations (downloads, version map fetches, upgrades):
+
+```bash
+# Set a proxy
+zvm proxy http://127.0.0.1:7890
+
+# Set a SOCKS5 proxy
+zvm proxy socks5://127.0.0.1:1080
+
+# Clear proxy (auto-detect from http_proxy/https_proxy env vars)
+zvm proxy default
+
+# Show current proxy setting
+zvm proxy
+```
+
 ## Shell Completion
 
 ### Zsh
@@ -227,7 +246,10 @@ Settings are stored in `~/.zvm/settings.json`:
     "zls_vmu": "https://releases.zigtools.org/",
     "mirror_list_url": "https://ziglang.org/download/community-mirrors.txt",
     "use_color": true,
-    "always_force_install": false
+    "always_force_install": false,
+    "preferred_mirror": "",
+    "mirror_updated_at": 0,
+    "proxy": ""
 }
 ```
 
@@ -275,7 +297,7 @@ src/
 ├── platform.zig      OS/arch detection, symlink management
 ├── terminal.zig      ANSI color output helpers
 ├── version_map.zig   Fetch/parse Zig & ZLS version maps
-├── http_client.zig   HTTP downloads with mirror support
+├── http_client.zig   HTTP downloads with mirror and proxy support
 ├── crypto.zig        SHA256 file verification
 ├── archive.zig       Archive extraction (.tar.xz, .zip)
 ├── install.zig       Install command (download, verify, extract)
@@ -287,6 +309,7 @@ src/
 ├── upgrade.zig       Upgrade command (self-update from GitHub)
 ├── vmu.zig           VMU command (version map source)
 ├── mirrorlist.zig    Mirrorlist command (mirror config)
+├── proxy.zig         Proxy command (proxy config)
 └── completion.zig    Shell completion generation (zsh/bash)
 ```
 
@@ -301,6 +324,7 @@ This is a rewrite of [tristanisham/zvm](https://github.com/tristanisham/zvm) (Go
 | Build tool | Go compiler | Zig compiler |
 | Shell completion | No | Yes (zsh, bash) |
 | Mirror selection | Sequential | Latency-based |
+| Proxy support | No | Yes (HTTP/SOCKS5) |
 | Windows support | Yes | Yes (junctions) |
 
 ## License
