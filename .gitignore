@@ -1,0 +1,42 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# Executable
+*.exe
+
+# Test database files
+*.db
+*.db.wal
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+*.dSYM/
+*.pdb
+
+# Temporary files
+*.tmp
+*.bak
+tmp/
+temp/
+.claude/
+

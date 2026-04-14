@@ -1,0 +1,278 @@
+# zvm — Zig Version Manager
+
+A fast, dependency-free version manager for [Zig](https://ziglang.org/), written entirely in Zig 0.15.x.
+
+Manage multiple Zig compiler installations, switch between versions instantly, and keep your toolchain up to date — all with a single static binary.
+
+## Features
+
+- **Zero dependencies** — single static binary, no runtime requirements
+- **Cross-platform** — macOS, Linux, Windows (x86_64 and aarch64)
+- **Fast downloads** — community mirror support for faster distribution
+- **SHA256 verification** — every download is checksum-verified
+- **ZLS support** — install the Zig Language Server alongside Zig
+- **Shell completion** — tab completion for zsh and bash
+- **Self-updating** — `zvm upgrade` downloads the latest release
+
+## Installation
+
+### Pre-built Binaries
+
+Download the latest release for your platform from the [Releases](https://github.com/lispking/zvm/releases) page.
+
+```bash
+# Example: macOS/arm64
+curl -L https://github.com/lispking/zvm/releases/latest/download/zvm-macos-aarch64.tar.gz | tar xz
+chmod +x zvm
+sudo mv zvm /usr/local/bin/
+```
+
+### Build from Source
+
+Requirements: [Zig 0.15.x](https://ziglang.org/download/)
+
+```bash
+git clone https://github.com/lispking/zvm.git
+cd zvm
+zig build -Doptimize=ReleaseSafe
+# Binary at zig-out/bin/zvm
+```
+
+### Post-Install Setup
+
+Add zvm's bin directory to your PATH:
+
+```bash
+export PATH="$HOME/.zvm/bin:$PATH"
+```
+
+## Quick Start
+
+```bash
+# Install a Zig version
+zvm install 0.15.2
+
+# Install latest nightly build
+zvm install master
+
+# Install with ZLS (Zig Language Server)
+zvm install --zls 0.15.2
+
+# Switch to a different version
+zvm use 0.14.0
+
+# List installed versions
+zvm list
+
+# List all available remote versions
+zvm available
+# or: zvm list --all, zvm remote
+
+# Run a specific version without switching default
+zvm run 0.13.0 build run
+
+# Remove an installed version
+zvm uninstall 0.13.0
+
+# Self-update zvm
+zvm upgrade
+```
+
+## Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `install` | `i` | Install a Zig version |
+| `use` | | Switch to an installed version |
+| `list` | `ls` | List installed versions |
+| `available` | `remote` | List all remote versions |
+| `uninstall` | `rm` | Remove an installed version |
+| `clean` | | Remove downloaded archives |
+| `run` | | Run a version without switching default |
+| `upgrade` | | Upgrade zvm to the latest version |
+| `vmu` | | Set version map source (zig/zls) |
+| `mirrorlist` | | Set mirror distribution server |
+| `completion` | | Generate shell completion script |
+| `version` | `-v` | Print zvm version |
+| `help` | `-h` | Print help message |
+
+### Global Options
+
+```
+--color=VALUE    Toggle color output (on/off/true/false)
+--help, -h       Print help
+--version, -v    Print version
+```
+
+### Install Options
+
+```
+--force, -f      Force re-install even if already installed
+--zls            Also install ZLS (Zig Language Server)
+--full           Install ZLS with full compatibility mode
+--nomirror       Skip community mirror downloads
+```
+
+### List Options
+
+```
+--all, -a        List all remote versions available for download
+--vmu            Show configured version map URLs
+```
+
+### Use Options
+
+```
+--sync           Use version from build.zig.zon's minimum_zig_version
+```
+
+### VMU (Version Map URL)
+
+Change where zvm fetches version information:
+
+```bash
+# Use official Zig releases (default)
+zvm vmu zig default
+
+# Use Mach engine builds
+zvm vmu zig mach
+
+# Use a custom version map URL
+zvm vmu zig https://example.com/versions.json
+
+# Reset ZLS source
+zvm vmu zls default
+```
+
+### Mirror List
+
+Configure community mirrors for faster downloads:
+
+```bash
+# Reset to official mirrors
+zvm mirrorlist default
+
+# Set a custom mirror
+zvm mirrorlist https://example.com/mirrors.txt
+
+# Show current mirror setting
+zvm mirrorlist
+```
+
+## Shell Completion
+
+### Zsh
+
+Add to `~/.zshrc`:
+
+```bash
+eval "$(zvm completion zsh)"
+```
+
+### Bash
+
+Add to `~/.bashrc`:
+
+```bash
+eval "$(zvm completion bash)"
+```
+
+## How It Works
+
+```
+~/.zvm/
+├── bin          → symlink to the active version directory
+├── 0.15.2/      → Zig 0.15.2 installation
+│   └── zig      → Zig compiler binary
+├── 0.14.0/      → Zig 0.14.0 installation
+│   └── zig
+├── master/      → Latest nightly build
+│   └── zig
+├── self/        → zvm's own data
+└── settings.json → Configuration file
+```
+
+- **Version switching** uses symbolic links — `~/.zvm/bin` points to the active version's directory
+- **Downloads** are streamed directly to disk with SHA256 verification
+- **Settings** are persisted immediately on every change to `~/.zvm/settings.json`
+- **No background services** — zvm runs only when you invoke it
+
+## Configuration
+
+Settings are stored in `~/.zvm/settings.json`:
+
+```json
+{
+    "version_map_url": "https://ziglang.org/download/index.json",
+    "zls_vmu": "https://releases.zigtools.org/",
+    "mirror_list_url": "https://ziglang.org/download/community-mirrors.txt",
+    "use_color": true,
+    "always_force_install": false
+}
+```
+
+Override the default `~/.zvm` location with the `ZVM_PATH` environment variable:
+
+```bash
+export ZVM_PATH="/custom/path"
+```
+
+## CI / Releases
+
+Pushing a `v*` tag triggers automatic CI builds for all platforms:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This creates a GitHub Release with pre-built binaries for:
+- `zvm-macos-x86_64.tar.gz`
+- `zvm-macos-aarch64.tar.gz`
+- `zvm-linux-x86_64.tar.gz`
+- `zvm-linux-aarch64.tar.gz`
+- `zvm-windows-x86_64.tar.gz`
+- `zvm-windows-aarch64.tar.gz`
+
+## Project Structure
+
+```
+src/
+├── main.zig          Entry point: allocator setup, CLI dispatch
+├── cli.zig           Hand-written CLI parser with aliases and flags
+├── zvm.zig           Core ZVM struct (base dir, settings, versions)
+├── settings.zig      Settings persistence (JSON load/save)
+├── errors.zig        Domain error definitions
+├── platform.zig      OS/arch detection, symlink management
+├── terminal.zig      ANSI color output helpers
+├── version_map.zig   Fetch/parse Zig & ZLS version maps
+├── http_client.zig   HTTP downloads with mirror support
+├── crypto.zig        SHA256 file verification
+├── archive.zig       Archive extraction (.tar.xz, .zip)
+├── install.zig       Install command (download, verify, extract)
+├── use.zig           Use command (switch active version)
+├── list.zig          List command (installed, remote, VMU)
+├── uninstall.zig     Uninstall command
+├── clean.zig         Clean command (remove archives)
+├── run.zig           Run command (execute specific version)
+├── upgrade.zig       Upgrade command (self-update from GitHub)
+├── vmu.zig           VMU command (version map source)
+├── mirrorlist.zig    Mirrorlist command (mirror config)
+└── completion.zig    Shell completion generation (zsh/bash)
+```
+
+## Comparison with the Go Version
+
+This is a rewrite of [tristanisham/zvm](https://github.com/tristanisham/zvm) (Go). Key differences:
+
+| | Go (original) | Zig (this) |
+|---|---|---|
+| Binary size | ~10MB | ~1-2MB |
+| Dependencies | Go runtime | None (static) |
+| Build tool | Go compiler | Zig compiler |
+| Shell completion | Yes | Yes (zsh, bash) |
+| Mirror support | Yes | Yes |
+
+## License
+
+MIT

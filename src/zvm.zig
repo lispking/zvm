@@ -1,0 +1,152 @@
+//! ZVM core struct — the central data structure for the Zig Version Manager.
+//! Manages the base directory (~/.zvm), settings, version discovery,
+//! symlink-based version switching, and installed version enumeration.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const settings_mod = @import("settings.zig");
+const platform = @import("platform.zig");
+
+pub const ZVM = struct {
+    /// Base directory for all zvm data (default: ~/.zvm).
+    base_dir: []const u8,
+    /// Loaded settings (version map URLs, color prefs, etc.).
+    settings: settings_mod.Settings,
+    /// GPA allocator for long-lived allocations.
+    allocator: std.mem.Allocator,
+    /// Resolved home directory path (owned, freed in deinit).
+    home: []const u8,
+
+    /// Initialize the ZVM environment.
+    /// Resolves home directory, creates ~/.zvm and ~/.zvm/self directories,
+    /// and loads (or creates) settings from JSON.
+    pub fn init(allocator: std.mem.Allocator) !ZVM {
+        const home = try platform.getHomeDir(allocator);
+
+        var base_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const base_dir = try std.fmt.bufPrint(&base_buf, "{s}/.zvm", .{home});
+        const owned_base = try allocator.dupe(u8, base_dir);
+
+        // Create base directories
+        std.fs.cwd().makePath(owned_base) catch {};
+        const self_path = try std.fmt.allocPrint(allocator, "{s}/self", .{owned_base});
+        std.fs.cwd().makePath(self_path) catch {};
+        allocator.free(self_path);
+
+        // Load settings — settings takes ownership of the path
+        const settings_path = try std.fmt.allocPrint(allocator, "{s}/settings.json", .{owned_base});
+        const settings = try settings_mod.Settings.load(allocator, settings_path);
+
+        return .{
+            .base_dir = owned_base,
+            .settings = settings,
+            .allocator = allocator,
+            .home = home,
+        };
+    }
+
+    /// Release all owned memory (home, base_dir, settings strings, settings path).
+    pub fn deinit(self: *ZVM) void {
+        self.allocator.free(self.home);
+        self.allocator.free(self.base_dir);
+        self.allocator.free(self.settings.version_map_url);
+        self.allocator.free(self.settings.zls_vmu);
+        self.allocator.free(self.settings.mirror_list_url);
+        if (self.settings.path) |p| self.allocator.free(p);
+    }
+
+    /// Build the path for a specific version directory (e.g., ~/.zvm/0.13.0).
+    pub fn versionPath(self: *ZVM, buf: []u8, version: []const u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}/{s}", .{ self.base_dir, version }) catch buf[0..0];
+    }
+
+    /// Build the bin symlink path (e.g., ~/.zvm/bin).
+    pub fn binPath(self: *ZVM, buf: []u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}/bin", .{self.base_dir}) catch buf[0..0];
+    }
+
+    /// Build the path for the cached Zig version map (e.g., ~/.zvm/versions.json).
+    pub fn versionsCachePath(self: *ZVM, buf: []u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}/versions.json", .{self.base_dir}) catch buf[0..0];
+    }
+
+    /// Build the path for the cached ZLS version map (e.g., ~/.zvm/versions-zls.json).
+    pub fn zlsVersionsCachePath(self: *ZVM, buf: []u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}/versions-zls.json", .{self.base_dir}) catch buf[0..0];
+    }
+
+    /// List all installed Zig versions by iterating the base directory.
+    /// Skips special directories: "bin", "self", and .json files.
+    /// Caller owns the returned list and must free each item.
+    pub fn getInstalledVersions(self: *ZVM, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+        var versions: std.ArrayList([]const u8) = .empty;
+        errdefer versions.deinit(allocator);
+
+        var dir = try std.fs.cwd().openDir(self.base_dir, .{ .iterate = true });
+        defer dir.close();
+
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind != .directory) continue;
+            // Skip special directories
+            if (std.mem.eql(u8, entry.name, "bin") or
+                std.mem.eql(u8, entry.name, "self"))
+                continue;
+            // Skip settings/cache files if somehow dirs
+            if (std.mem.endsWith(u8, entry.name, ".json")) continue;
+
+            const name = try allocator.dupe(u8, entry.name);
+            try versions.append(allocator, name);
+        }
+
+        return versions;
+    }
+
+    /// Check if a specific Zig version is installed by testing directory existence.
+    pub fn isVersionInstalled(self: *ZVM, version: []const u8) bool {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = self.versionPath(&buf, version);
+        std.fs.cwd().access(path, .{}) catch return false;
+        return true;
+    }
+
+    /// Set the active Zig version by creating/updating the ~/.zvm/bin symlink.
+    /// The symlink points to the absolute path of the version directory.
+    pub fn setBin(self: *ZVM, version: []const u8) !void {
+        var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const target = self.versionPath(&target_buf, version);
+
+        var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const link_path = self.binPath(&link_buf);
+
+        // Build absolute path for the symlink target
+        var full_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+        const cwd = try std.process.getCwd(&full_buf);
+        const full_path = try std.fmt.bufPrint(full_buf[cwd.len..], "/{s}", .{target});
+
+        // Copy to a clean buffer to ensure null-termination
+        var clean_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+        const clean_path = std.fmt.bufPrint(&clean_buf, "{s}{s}", .{ cwd, full_path }) catch clean_buf[0..0];
+
+        // Remove existing symlink, then create new one
+        platform.removeSymlink(link_path);
+        try platform.createSymlink(clean_path, link_path);
+    }
+
+    /// Get the currently active version by reading the ~/.zvm/bin symlink target.
+    /// Returns null if no symlink exists or it cannot be read.
+    /// Caller owns the returned memory.
+    pub fn getActiveVersion(self: *ZVM, allocator: std.mem.Allocator) ?[]const u8 {
+        var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const link_path = self.binPath(&link_buf);
+
+        var target_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+        const target = std.posix.readlink(link_path, &target_buf) catch return null;
+
+        // Extract version name from the target path (last path component)
+        if (std.mem.lastIndexOfScalar(u8, target, '/')) |idx| {
+            return allocator.dupe(u8, target[idx + 1 ..]) catch return null;
+        }
+        return allocator.dupe(u8, target) catch return null;
+    }
+};
