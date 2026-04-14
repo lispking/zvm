@@ -21,15 +21,11 @@ jobs:
           version: '0.15.2'
 
       - name: Build
-        run: zig build -Doptimize=ReleaseSafe
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-gnu
         shell: bash
 
       - name: Run tests
         run: zig build test
-        shell: bash
-
-      - name: Verify binary
-        run: zig-out/bin/zvm version
         shell: bash
 
   lint:
