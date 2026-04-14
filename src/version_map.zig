@@ -4,27 +4,17 @@
 //! Uses dynamic JSON parsing (std.json.Value) since version keys are not known at compile time.
 
 const std = @import("std");
+const http_client = @import("http_client.zig");
 
 /// The version map is represented as a JSON ObjectMap (dynamic key-value pairs).
 pub const VersionMap = std.json.ObjectMap;
 
 /// Fetch the Zig version map from the given URL.
 /// Returns a parsed JSON value tree — caller must call parsed.deinit() when done.
-pub fn fetchVersionMap(allocator: std.mem.Allocator, url: []const u8) !std.json.Parsed(std.json.Value) {
-    var client: std.http.Client = .{ .allocator = allocator };
-    defer client.deinit();
+pub fn fetchVersionMap(allocator: std.mem.Allocator, url: []const u8, proxy: []const u8) !std.json.Parsed(std.json.Value) {
+    const body = try http_client.downloadToMemoryWithProxy(allocator, url, proxy);
+    defer allocator.free(body);
 
-    var body_buf: [1024 * 1024]u8 = undefined;
-    var body_writer: std.Io.Writer = .fixed(&body_buf);
-
-    const result = try client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &body_writer,
-    });
-
-    if (result.status != .ok) return error.DownloadFailed;
-
-    const body = body_writer.buffered();
     return try std.json.parseFromSlice(std.json.Value, allocator, body, .{
         .ignore_unknown_fields = true,
     });

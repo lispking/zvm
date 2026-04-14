@@ -20,6 +20,7 @@ pub const Command = enum {
     upgrade,
     vmu,
     mirrorlist,
+    proxy,
     completion,
     version,
     help,
@@ -79,6 +80,9 @@ pub const ParsedCommand = union(Command) {
     mirrorlist: struct {
         url: ?[]const u8,
     },
+    proxy: struct {
+        url: ?[]const u8,
+    },
     completion: struct {
         shell: ShellType,
     },
@@ -107,6 +111,7 @@ const command_aliases = std.StaticStringMap(Command).initComptime(.{
     .{ "upgrade", .upgrade },
     .{ "vmu", .vmu },
     .{ "mirrorlist", .mirrorlist },
+    .{ "proxy", .proxy },
     .{ "completion", .completion },
     .{ "version", .version },
     .{ "help", .help },
@@ -165,6 +170,7 @@ pub fn parse(allocator: std.mem.Allocator) !struct { global: GlobalFlags, cmd: P
         .upgrade => ParsedCommand.upgrade,
         .vmu => try parseVmu(allocator, &args),
         .mirrorlist => try parseMirrorlist(allocator, &args),
+        .proxy => try parseProxy(allocator, &args),
         .completion => try parseCompletion(&args),
         .version => ParsedCommand.version,
         .help => ParsedCommand.help,
@@ -294,6 +300,13 @@ fn parseMirrorlist(allocator: std.mem.Allocator, args: anytype) !ParsedCommand {
     } };
 }
 
+fn parseProxy(allocator: std.mem.Allocator, args: anytype) !ParsedCommand {
+    const url = args.next();
+    return .{ .proxy = .{
+        .url = if (url) |u| try allocator.dupe(u8, u) else null,
+    } };
+}
+
 fn parseCompletion(args: anytype) !ParsedCommand {
     const shell_str = args.next() orelse return error.MissingArgument;
     const shell: ShellType = if (std.mem.eql(u8, shell_str, "zsh"))
@@ -323,6 +336,7 @@ pub fn printHelp(writer: *std.Io.Writer) !void {
         \\  upgrade           Upgrade zvm to the latest version
         \\  vmu               Set version map source (zig/zls)
         \\  mirrorlist        Set mirror distribution server
+        \\  proxy             Set HTTP/HTTPS proxy for downloads
         \\  completion        Generate shell completion script
         \\  version           Print zvm version
         \\  help              Print this help message
@@ -435,6 +449,19 @@ pub fn printCommandHelp(writer: *std.Io.Writer, cmd: Command) !void {
             \\
             \\Usage:
             \\  zvm mirrorlist <url|default>
+            \\
+        ),
+        .proxy => try writer.writeAll(
+            \\Set HTTP/HTTPS proxy for downloads.
+            \\
+            \\Usage:
+            \\  zvm proxy <url|default>
+            \\
+            \\Examples:
+            \\  zvm proxy http://127.0.0.1:7890     Set proxy URL
+            \\  zvm proxy socks5://127.0.0.1:1080   Set SOCKS5 proxy
+            \\  zvm proxy default                   Clear proxy (auto-detect from env)
+            \\  zvm proxy                           Show current proxy setting
             \\
         ),
         .version, .help => printHelp(writer) catch {},

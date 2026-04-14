@@ -10,6 +10,45 @@ const settings_mod = @import("settings.zig");
 /// Cache TTL: 24 hours in seconds.
 const MIRROR_CACHE_TTL: i64 = 86400;
 
+/// Create an HTTP client configured with proxy if provided.
+/// If proxy_url is empty, falls back to environment variables (http_proxy, https_proxy, etc.).
+fn createClient(allocator: std.mem.Allocator, proxy_url: []const u8) !std.http.Client {
+    var client: std.http.Client = .{ .allocator = allocator };
+    if (proxy_url.len > 0) {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const uri = std.Uri.parse(proxy_url) catch
+            std.Uri.parseAfterScheme("http", proxy_url) catch
+            return client;
+        const protocol = std.http.Client.Protocol.fromUri(uri) orelse return client;
+        const host = try uri.getHostAlloc(arena_alloc);
+        const port: u16 = port: {
+            if (uri.port) |p| break :port @intCast(p);
+            break :port switch (protocol) {
+                .plain => 80,
+                .tls => 443,
+            };
+        };
+
+        const proxy = try allocator.create(std.http.Client.Proxy);
+        proxy.* = .{
+            .protocol = protocol,
+            .host = host,
+            .authorization = null,
+            .port = port,
+            .supports_connect = true,
+        };
+        client.http_proxy = proxy;
+        client.https_proxy = proxy;
+    } else {
+        // Auto-detect from environment variables
+        client.initDefaultProxies(allocator) catch {};
+    }
+    return client;
+}
+
 /// Download a file from a URL to the given file path.
 /// Uses streaming to handle large files without loading everything into memory.
 pub fn downloadToFile(
@@ -17,7 +56,16 @@ pub fn downloadToFile(
     url: []const u8,
     dest_path: []const u8,
 ) !void {
-    var client: std.http.Client = .{ .allocator = allocator };
+    return downloadToFileWithProxy(allocator, url, dest_path, "");
+}
+
+pub fn downloadToFileWithProxy(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    dest_path: []const u8,
+    proxy_url: []const u8,
+) !void {
+    var client = try createClient(allocator, proxy_url);
     defer client.deinit();
 
     const uri = try std.Uri.parse(url);
@@ -28,18 +76,20 @@ pub fn downloadToFile(
 
     try req.sendBodiless();
 
-    var redirect_buf: [8192]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buf);
+    var head_buf: [16384]u8 = undefined;
+    var response = try req.receiveHead(&head_buf);
 
-    if (response.head.status != .ok) return error.DownloadFailed;
+    if (response.head.status != .ok) {
+        return error.DownloadFailed;
+    }
 
     const file = try std.fs.cwd().createFile(dest_path, .{});
     defer file.close();
 
-    var file_buf: [8192]u8 = undefined;
+    var file_buf: [16384]u8 = undefined;
     var file_writer = file.writer(&file_buf);
 
-    var reader_buf: [8192]u8 = undefined;
+    var reader_buf: [16384]u8 = undefined;
     const body_reader = response.reader(&reader_buf);
 
     // Use streamRemaining to ensure ALL bytes are written, including the last partial chunk.
@@ -63,7 +113,15 @@ pub fn downloadToMemory(
     allocator: std.mem.Allocator,
     url: []const u8,
 ) ![]const u8 {
-    var client: std.http.Client = .{ .allocator = allocator };
+    return downloadToMemoryWithProxy(allocator, url, "");
+}
+
+pub fn downloadToMemoryWithProxy(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    proxy_url: []const u8,
+) ![]const u8 {
+    var client = try createClient(allocator, proxy_url);
     defer client.deinit();
 
     // Use a fixed buffer approach for efficiency
@@ -90,8 +148,8 @@ const MirrorCandidate = struct {
 
 /// Measure the latency of a URL by sending a HEAD request.
 /// Returns the round-trip time in nanoseconds, or null if the request failed.
-fn measureLatency(allocator: std.mem.Allocator, url: []const u8) ?u64 {
-    var client: std.http.Client = .{ .allocator = allocator };
+fn measureLatency(allocator: std.mem.Allocator, url: []const u8, proxy_url: []const u8) ?u64 {
+    var client = createClient(allocator, proxy_url) catch return null;
     defer client.deinit();
 
     const uri = std.Uri.parse(url) catch return null;
@@ -156,7 +214,7 @@ pub fn attemptMirrorDownload(
                 return try probeAndDownload(allocator, mirror_list_url, original_url, filename, dest_path, verbose_writer, settings);
             defer allocator.free(cached_url);
 
-            downloadToFile(allocator, cached_url, dest_path) catch {
+            downloadToFileWithProxy(allocator, cached_url, dest_path, settings.proxy) catch {
                 // Cached mirror failed — clear cache and fall through to full probe
                 settings.clearPreferredMirror(allocator);
                 if (verbose_writer) |vw| {
@@ -189,15 +247,17 @@ fn probeAndDownload(
     verbose_writer: ?*std.Io.Writer,
     settings: *settings_mod.Settings,
 ) ![]const u8 {
+    const proxy = settings.proxy;
+
     // No mirror list — download directly from the original URL
     if (mirror_list_url.len == 0) {
-        try downloadToFile(allocator, original_url, dest_path);
+        try downloadToFileWithProxy(allocator, original_url, dest_path, proxy);
         return allocator.dupe(u8, original_url);
     }
 
     // Fetch the mirror list
-    const mirror_list_content = downloadToMemory(allocator, mirror_list_url) catch {
-        try downloadToFile(allocator, original_url, dest_path);
+    const mirror_list_content = downloadToMemoryWithProxy(allocator, mirror_list_url, proxy) catch {
+        try downloadToFileWithProxy(allocator, original_url, dest_path, proxy);
         return allocator.dupe(u8, original_url);
     };
     defer allocator.free(mirror_list_content);
@@ -214,7 +274,7 @@ fn probeAndDownload(
     }
 
     if (mirrors.items.len == 0) {
-        try downloadToFile(allocator, original_url, dest_path);
+        try downloadToFileWithProxy(allocator, original_url, dest_path, proxy);
         return allocator.dupe(u8, original_url);
     }
 
@@ -223,7 +283,7 @@ fn probeAndDownload(
     defer candidates.deinit(allocator);
 
     // Measure latency for the original URL
-    if (measureLatency(allocator, original_url)) |latency| {
+    if (measureLatency(allocator, original_url, proxy)) |latency| {
         const owned = allocator.dupe(u8, original_url) catch unreachable;
         try candidates.append(allocator, .{ .url = owned, .latency_ns = latency, .owned = true });
     }
@@ -233,7 +293,7 @@ fn probeAndDownload(
         const mirror_url = std.fmt.allocPrint(allocator, "{s}/{s}", .{ mirror_base, filename }) catch continue;
         defer allocator.free(mirror_url);
 
-        if (measureLatency(allocator, mirror_url)) |latency| {
+        if (measureLatency(allocator, mirror_url, proxy)) |latency| {
             const owned_url = allocator.dupe(u8, mirror_url) catch continue;
             try candidates.append(allocator, .{ .url = owned_url, .latency_ns = latency, .owned = true });
         }
@@ -241,7 +301,7 @@ fn probeAndDownload(
 
     // If no candidates responded, fall back to the original URL
     if (candidates.items.len == 0) {
-        try downloadToFile(allocator, original_url, dest_path);
+        try downloadToFileWithProxy(allocator, original_url, dest_path, proxy);
         return allocator.dupe(u8, original_url);
     }
 
@@ -264,7 +324,7 @@ fn probeAndDownload(
 
     // Try downloading from candidates in latency order
     for (candidates.items, 0..) |candidate, idx| {
-        downloadToFile(allocator, candidate.url, dest_path) catch {
+        downloadToFileWithProxy(allocator, candidate.url, dest_path, proxy) catch {
             continue;
         };
         // Success — cache the winning mirror base URL for next time
@@ -289,7 +349,7 @@ fn probeAndDownload(
     }
     candidates.items.len = 0;
 
-    try downloadToFile(allocator, original_url, dest_path);
+    try downloadToFileWithProxy(allocator, original_url, dest_path, proxy);
     return allocator.dupe(u8, original_url);
 }
 

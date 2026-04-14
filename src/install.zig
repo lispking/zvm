@@ -33,7 +33,7 @@ pub fn run(
     try stdout.print("Fetching version map...\n", .{});
     try stdout.flush();
 
-    const parsed_map = version_map.fetchVersionMap(allocator, zvm.settings.version_map_url) catch |err| {
+    const parsed_map = version_map.fetchVersionMap(allocator, zvm.settings.version_map_url, zvm.settings.proxy) catch |err| {
         try terminal.printError(stderr, "Failed to fetch version map");
         return err;
     };
@@ -113,11 +113,11 @@ fn installVersion(
     try stdout.flush();
 
     const actual_url = if (flags.nomirror) blk: {
-        try http_client.downloadToFile(allocator, tar_url, archive_path);
+        try http_client.downloadToFileWithProxy(allocator, tar_url, archive_path, zvm.settings.proxy);
         break :blk tar_url;
     } else blk: {
         const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout, &zvm.settings) catch {
-            try http_client.downloadToFile(allocator, tar_url, archive_path);
+            try http_client.downloadToFileWithProxy(allocator, tar_url, archive_path, zvm.settings.proxy);
             break :blk tar_url;
         };
         break :blk mirror_url;
@@ -356,7 +356,7 @@ fn installZls(
     );
     defer allocator.free(zls_url);
 
-    const zls_response = http_client.downloadToMemory(allocator, zls_url) catch {
+    const zls_response = http_client.downloadToMemoryWithProxy(allocator, zls_url, zvm.settings.proxy) catch {
         try terminal.printError(stderr, "Failed to query ZLS version");
         return;
     };
@@ -412,7 +412,7 @@ fn installZls(
     var archive_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const zls_archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/{s}", .{ zvm.base_dir, zls_archive_name });
 
-    try http_client.downloadToFile(allocator, zls_tarball, zls_archive_path);
+    try http_client.downloadToFileWithProxy(allocator, zls_tarball, zls_archive_path, zvm.settings.proxy);
 
     // Extract to a temporary directory
     var temp_buf: [std.fs.max_path_bytes * 2]u8 = undefined;

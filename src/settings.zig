@@ -20,6 +20,8 @@ pub const Settings = struct {
     preferred_mirror: []const u8,
     /// Unix timestamp (seconds) when the preferred mirror was last validated.
     mirror_updated_at: i64,
+    /// HTTP/HTTPS proxy URL (empty = auto-detect from environment variables).
+    proxy: []const u8,
 
     /// Internal path to the settings JSON file (not serialized).
     path: ?[]const u8,
@@ -33,6 +35,7 @@ pub const Settings = struct {
         .always_force_install = false,
         .preferred_mirror = "",
         .mirror_updated_at = 0,
+        .proxy = "",
         .path = null,
     };
 
@@ -45,6 +48,7 @@ pub const Settings = struct {
         always_force_install: bool,
         preferred_mirror: []const u8 = "",
         mirror_updated_at: i64 = 0,
+        proxy: []const u8 = "",
     };
 
     /// Load settings from a JSON file, or create with defaults if not found.
@@ -87,6 +91,7 @@ pub const Settings = struct {
             .always_force_install = val.always_force_install,
             .preferred_mirror = try allocator.dupe(u8, val.preferred_mirror),
             .mirror_updated_at = val.mirror_updated_at,
+            .proxy = try allocator.dupe(u8, val.proxy),
             .path = path,
         };
 
@@ -109,6 +114,7 @@ pub const Settings = struct {
             .always_force_install = self.always_force_install,
             .preferred_mirror = self.preferred_mirror,
             .mirror_updated_at = self.mirror_updated_at,
+            .proxy = self.proxy,
         };
 
         // Ensure parent directory exists
@@ -193,6 +199,14 @@ pub const Settings = struct {
     pub fn toggleColor(self: *Settings, allocator: std.mem.Allocator) !void {
         self.use_color = !self.use_color;
         try self.save(allocator);
+    }
+
+    /// Set the proxy URL and persist immediately.
+    pub fn setProxy(self: *Settings, allocator: std.mem.Allocator, url: []const u8) !void {
+        const old = self.proxy;
+        self.proxy = try allocator.dupe(u8, url);
+        self.save(allocator) catch {};
+        allocator.free(old);
     }
 
     /// Update the cached preferred mirror and persist immediately.

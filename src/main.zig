@@ -155,6 +155,14 @@ pub fn main() !void {
                 std.process.exit(1);
             };
         },
+        .proxy => |proxy_cmd| {
+            const proxy_mod = @import("proxy.zig");
+            proxy_mod.run(&zvm, allocator, proxy_cmd.url, stdout, stderr) catch |err| {
+                try terminal.printError(stderr, @errorName(err));
+                try stderr.flush();
+                std.process.exit(1);
+            };
+        },
         .completion => |comp_cmd| {
             const completion = @import("completion.zig");
             completion.run(comp_cmd.shell, stdout) catch |err| {

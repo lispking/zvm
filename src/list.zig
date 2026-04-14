@@ -74,7 +74,7 @@ fn listRemote(
     try stdout.print("Fetching available versions...\n", .{});
     try stdout.flush();
 
-    const parsed = version_map.fetchVersionMap(allocator, zvm.settings.version_map_url) catch {
+    const parsed = version_map.fetchVersionMap(allocator, zvm.settings.version_map_url, zvm.settings.proxy) catch {
         try terminal.printError(stderr, "Failed to fetch version map");
         return;
     };

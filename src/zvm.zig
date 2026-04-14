@@ -53,6 +53,7 @@ pub const ZVM = struct {
         self.allocator.free(self.settings.zls_vmu);
         self.allocator.free(self.settings.mirror_list_url);
         self.allocator.free(self.settings.preferred_mirror);
+        self.allocator.free(self.settings.proxy);
         if (self.settings.path) |p| self.allocator.free(p);
     }
 

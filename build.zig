@@ -5,21 +5,23 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Embed version and git commit hash at build time
+    // Default "0.0.1" ensures local builds always have a lower version than
+    // any released version, so `zvm upgrade` can detect and perform the update.
     const version = b.option(
         []const u8,
         "version",
-        "Semantic version (e.g. 0.2.0). In CI, pass the git tag. Locally defaults to git describe or \"dev\".",
+        "Semantic version (e.g. 0.2.0). In CI, pass the git tag. Locally defaults to git describe or \"0.0.1\".",
     ) orelse blk: {
         const tag = std.process.Child.run(.{
             .allocator = b.allocator,
             .argv = &.{ "git", "describe", "--tags", "--abbrev=0" },
-        }) catch break :blk "0.1.0";
+        }) catch break :blk "0.0.1";
         switch (tag.term) {
-            .Exited => |code| if (code != 0) break :blk "0.1.0",
-            else => break :blk "0.1.0",
+            .Exited => |code| if (code != 0) break :blk "0.0.1",
+            else => break :blk "0.0.1",
         }
         const trimmed = std.mem.trim(u8, tag.stdout, " \n\r");
-        if (trimmed.len == 0) break :blk "0.1.0";
+        if (trimmed.len == 0) break :blk "0.0.1";
         break :blk if (trimmed[0] == 'v') trimmed[1..] else trimmed;
     };
 
