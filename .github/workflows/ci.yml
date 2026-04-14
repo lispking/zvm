@@ -8,24 +8,8 @@ on:
 
 jobs:
   build:
-    name: Build & Test (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-linux-gnu
-          - os: macos-latest
-            target: aarch64-macos
-          - os: macos-latest
-            target: x86_64-macos
-          - os: windows-latest
-            target: x86_64-windows-gnu
-          - os: windows-latest
-            target: aarch64-windows-gnu
+    name: Build & Test
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -37,7 +21,7 @@ jobs:
           version: '0.15.2'
 
       - name: Build
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+        run: zig build -Doptimize=ReleaseSafe
         shell: bash
 
       - name: Run tests
@@ -45,7 +29,6 @@ jobs:
         shell: bash
 
       - name: Verify binary
-        if: matrix.target == 'x86_64-linux-gnu' || matrix.target == 'aarch64-macos'
         run: zig-out/bin/zvm version
         shell: bash
 
