@@ -1,5 +1,7 @@
 //! HTTP client for downloading files and fetching remote content.
-//! Uses Zig's std.http.Client for all network operations.
+//! Uses Zig's std.http.Client for direct downloads, and curl subprocess when
+//! a proxy is configured (Zig's HTTP client cannot handle HTTPS through HTTP
+//! proxies due to missing TLS-over-CONNECT tunnel support).
 //! Supports latency-based mirror selection for fastest downloads.
 //! Caches preferred mirror in settings to skip probing on subsequent installs.
 
@@ -9,45 +11,6 @@ const settings_mod = @import("settings.zig");
 
 /// Cache TTL: 24 hours in seconds.
 const MIRROR_CACHE_TTL: i64 = 86400;
-
-/// Create an HTTP client configured with proxy if provided.
-/// If proxy_url is empty, falls back to environment variables (http_proxy, https_proxy, etc.).
-fn createClient(allocator: std.mem.Allocator, proxy_url: []const u8) !std.http.Client {
-    var client: std.http.Client = .{ .allocator = allocator };
-    if (proxy_url.len > 0) {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        const uri = std.Uri.parse(proxy_url) catch
-            std.Uri.parseAfterScheme("http", proxy_url) catch
-            return client;
-        const protocol = std.http.Client.Protocol.fromUri(uri) orelse return client;
-        const host = try uri.getHostAlloc(arena_alloc);
-        const port: u16 = port: {
-            if (uri.port) |p| break :port @intCast(p);
-            break :port switch (protocol) {
-                .plain => 80,
-                .tls => 443,
-            };
-        };
-
-        const proxy = try allocator.create(std.http.Client.Proxy);
-        proxy.* = .{
-            .protocol = protocol,
-            .host = host,
-            .authorization = null,
-            .port = port,
-            .supports_connect = true,
-        };
-        client.http_proxy = proxy;
-        client.https_proxy = proxy;
-    } else {
-        // Auto-detect from environment variables
-        client.initDefaultProxies(allocator) catch {};
-    }
-    return client;
-}
 
 /// Download a file from a URL to the given file path.
 /// Uses streaming to handle large files without loading everything into memory.
@@ -65,8 +28,48 @@ pub fn downloadToFileWithProxy(
     dest_path: []const u8,
     proxy_url: []const u8,
 ) !void {
-    var client = try createClient(allocator, proxy_url);
+    // When a proxy is configured, use curl which correctly handles
+    // HTTPS through HTTP proxies via CONNECT tunneling + TLS.
+    // Zig's std.http.Client has a known bug where it establishes the CONNECT
+    // tunnel but does not upgrade to TLS, causing the connection to be closed.
+    if (proxy_url.len > 0) {
+        return downloadFileViaCurl(allocator, url, dest_path, proxy_url);
+    }
+    return downloadFileDirect(allocator, url, dest_path);
+}
+
+/// Download a file using curl subprocess (used when proxy is configured).
+fn downloadFileViaCurl(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    dest_path: []const u8,
+    proxy_url: []const u8,
+) !void {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "curl", "-sL", "-x", proxy_url, "-o", dest_path, url },
+    }) catch {
+        return error.DownloadFailed;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    switch (result.term) {
+        .Exited => |code| if (code != 0) return error.DownloadFailed,
+        else => return error.DownloadFailed,
+    }
+}
+
+/// Download a file using Zig's built-in HTTP client (direct connection).
+fn downloadFileDirect(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    dest_path: []const u8,
+) !void {
+    var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
+
+    // Auto-detect proxy from environment variables
+    client.initDefaultProxies(allocator) catch {};
 
     const uri = try std.Uri.parse(url);
     var req = try client.request(.GET, uri, .{
@@ -92,9 +95,6 @@ pub fn downloadToFileWithProxy(
     var reader_buf: [16384]u8 = undefined;
     const body_reader = response.reader(&reader_buf);
 
-    // Use streamRemaining to ensure ALL bytes are written, including the last partial chunk.
-    // Note: Reader.take(n) drops the final partial chunk in Zig 0.15.x, so streamRemaining
-    // is required for correctness (e.g., SHA256 verification depends on every byte).
     _ = body_reader.streamRemaining(&file_writer.interface) catch |err| switch (err) {
         error.ReadFailed => {
             const body_err = response.bodyErr();
@@ -121,10 +121,48 @@ pub fn downloadToMemoryWithProxy(
     url: []const u8,
     proxy_url: []const u8,
 ) ![]const u8 {
-    var client = try createClient(allocator, proxy_url);
+    if (proxy_url.len > 0) {
+        return downloadMemoryViaCurl(allocator, url, proxy_url);
+    }
+    return downloadMemoryDirect(allocator, url);
+}
+
+/// Download content into memory using curl subprocess (used when proxy is configured).
+fn downloadMemoryViaCurl(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    proxy_url: []const u8,
+) ![]const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "curl", "-sL", "-x", proxy_url, url },
+    }) catch {
+        return error.DownloadFailed;
+    };
+    defer allocator.free(result.stderr);
+    switch (result.term) {
+        .Exited => |code| if (code != 0) {
+            allocator.free(result.stdout);
+            return error.DownloadFailed;
+        },
+        else => {
+            allocator.free(result.stdout);
+            return error.DownloadFailed;
+        },
+    }
+    return result.stdout;
+}
+
+/// Download content into memory using Zig's built-in HTTP client (direct connection).
+fn downloadMemoryDirect(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+) ![]const u8 {
+    var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
-    // Use a fixed buffer approach for efficiency
+    client.initDefaultProxies(allocator) catch {};
+
     var body_buf: [1024 * 1024]u8 = undefined;
     var body_writer: std.Io.Writer = .fixed(&body_buf);
 
@@ -149,7 +187,35 @@ const MirrorCandidate = struct {
 /// Measure the latency of a URL by sending a HEAD request.
 /// Returns the round-trip time in nanoseconds, or null if the request failed.
 fn measureLatency(allocator: std.mem.Allocator, url: []const u8, proxy_url: []const u8) ?u64 {
-    var client = createClient(allocator, proxy_url) catch return null;
+    if (proxy_url.len > 0) {
+        return measureLatencyViaCurl(allocator, url, proxy_url);
+    }
+    return measureLatencyDirect(allocator, url);
+}
+
+/// Measure latency using curl subprocess (when proxy is configured).
+fn measureLatencyViaCurl(allocator: std.mem.Allocator, url: []const u8, proxy_url: []const u8) ?u64 {
+    const start = std.time.Instant.now() catch return null;
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "curl", "-sI", "-x", proxy_url, "-o", "/dev/null", "-w", "%{http_code}", url },
+    }) catch return null;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const end = std.time.Instant.now() catch return null;
+    switch (result.term) {
+        .Exited => |code| if (code != 0) return null,
+        else => return null,
+    }
+    // Check HTTP status code starts with '2' (2xx)
+    const status = std.mem.trim(u8, result.stdout, " \n\r");
+    if (status.len < 1 or status[0] != '2') return null;
+    return end.since(start);
+}
+
+/// Measure latency using Zig's built-in HTTP client (direct connection).
+fn measureLatencyDirect(allocator: std.mem.Allocator, url: []const u8) ?u64 {
+    var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
     const uri = std.Uri.parse(url) catch return null;
