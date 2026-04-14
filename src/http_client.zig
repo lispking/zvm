@@ -136,6 +136,7 @@ fn downloadMemoryViaCurl(
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sL", "-x", proxy_url, url },
+        .max_output_bytes = 10 * 1024 * 1024, // 10MB — version map JSON and other responses
     }) catch {
         return error.DownloadFailed;
     };
