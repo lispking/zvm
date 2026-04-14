@@ -67,15 +67,20 @@ download() {
 # ── Detect current shell ────────────────────────────────────────────────
 detect_shell_rc() {
     local shell_name=""
-    if [ -n "${ZSH_VERSION:-}" ]; then
-        shell_name="zsh"
-    elif [ -n "${BASH_VERSION:-}" ]; then
-        shell_name="bash"
+
+    # Prefer $SHELL (user's login shell) over version variables,
+    # because the script may run under bash via shebang while the user uses zsh.
+    if [ -n "${SHELL:-}" ]; then
+        shell_name="$(basename "$SHELL")"
     fi
 
-    # Fallback to the basename of $SHELL
-    if [ -z "$shell_name" ] && [ -n "${SHELL:-}" ]; then
-        shell_name="$(basename "$SHELL")"
+    # Fallback to the running interpreter's version
+    if [ -z "$shell_name" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then
+            shell_name="zsh"
+        elif [ -n "${BASH_VERSION:-}" ]; then
+            shell_name="bash"
+        fi
     fi
 
     case "$shell_name" in
@@ -98,6 +103,16 @@ append_once() {
     fi
 }
 
+# ── Temp directory (script-level so EXIT trap can access it in zsh) ──
+TMP_DIR=""
+
+cleanup() {
+    if [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ]; then
+        rm -rf "$TMP_DIR"
+    fi
+}
+trap cleanup EXIT
+
 # ── Main ────────────────────────────────────────────────────────────────
 main() {
     echo ""
@@ -117,11 +132,9 @@ main() {
     local url="https://github.com/${REPO}/releases/latest/download/${archive_name}"
 
     # 3. Create temp directory
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    TMP_DIR="$(mktemp -d)"
 
-    local archive_path="${tmp_dir}/${archive_name}"
+    local archive_path="${TMP_DIR}/${archive_name}"
 
     # 4. Download
     info "Downloading ${archive_name}..."
@@ -129,11 +142,11 @@ main() {
 
     # 5. Extract
     info "Extracting..."
-    tar xzf "$archive_path" -C "$tmp_dir"
+    tar xzf "$archive_path" -C "$TMP_DIR"
 
     # Find the zvm binary inside the extracted directory
     local zvm_binary=""
-    for f in "${tmp_dir}"/zvm-*/zvm "${tmp_dir}"/zvm/zvm "${tmp_dir}"/zvm; do
+    for f in "${TMP_DIR}"/zvm-*/zvm "${TMP_DIR}"/zvm/zvm "${TMP_DIR}"/zvm; do
         if [ -f "$f" ] && [ -x "$f" ]; then
             zvm_binary="$f"
             break
@@ -142,7 +155,7 @@ main() {
 
     if [ -z "$zvm_binary" ]; then
         # Fallback: search for any zvm binary
-        zvm_binary="$(find "$tmp_dir" -name zvm -type f -perm -u+x | head -n 1)"
+        zvm_binary="$(find "$TMP_DIR" -name zvm -type f -perm -u+x | head -n 1)"
     fi
 
     if [ -z "$zvm_binary" ] || [ ! -f "$zvm_binary" ]; then
@@ -156,25 +169,40 @@ main() {
     chmod +x "${INSTALL_DIR}/zvm"
     ok "Installed zvm to ${INSTALL_DIR}/zvm"
 
-    # 7. Ensure install dir is in PATH
-    local needs_path=true
-    case ":${PATH}:" in
-        *":${INSTALL_DIR}:"*) needs_path=false ;;
-    esac
-
+    # 7. Ensure paths are in shell rc
     local shell_rc
     shell_rc="$(detect_shell_rc)"
 
-    if [ "$needs_path" = true ]; then
-        if [ -n "$shell_rc" ]; then
+    local needs_local_bin=true
+    case ":${PATH}:" in
+        *":${INSTALL_DIR}:"*) needs_local_bin=false ;;
+    esac
+
+    local needs_zvm_bin=true
+    case ":${PATH}:" in
+        *":${ZVM_DIR}/bin:"*) needs_zvm_bin=false ;;
+    esac
+
+    if [ "$needs_local_bin" = false ]; then
+        ok "Install directory already in PATH"
+    fi
+
+    if [ -n "$shell_rc" ]; then
+        if [ "$needs_local_bin" = true ]; then
             append_once "$shell_rc" "# >>> zvm >>>" \
                 "# >>> zvm >>>
 export PATH=\"\${HOME}/.local/bin:\$PATH\""
+        fi
+        if [ "$needs_zvm_bin" = true ]; then
             append_once "$shell_rc" "# <<< zvm <<<" \
                 "export PATH=\"\${ZVM_DIR:-\$HOME/.zvm}/bin:\$PATH\"
 # <<< zvm <<<"
+        fi
+        if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
             ok "Added PATH entries to ${shell_rc}"
-        else
+        fi
+    else
+        if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
             warn "Could not detect shell config file."
             warn "Add these lines to your shell config manually:"
             echo ""
@@ -182,22 +210,17 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
             echo '  export PATH="$HOME/.zvm/bin:$PATH"'
             echo ""
         fi
-    else
-        ok "Install directory already in PATH"
     fi
 
     # 8. Set up shell completion
     if [ -n "$shell_rc" ]; then
-        local shell_name
-        shell_name="$(basename "${SHELL:-}")"
-
-        case "$shell_name" in
-            zsh)
+        case "$shell_rc" in
+            */.zshrc)
                 append_once "$shell_rc" "# zvm completion" \
                     'eval "$(zvm completion zsh 2>/dev/null)"'
                 ok "Added zsh completion to ${shell_rc}"
                 ;;
-            bash)
+            */.bashrc)
                 append_once "$shell_rc" "# zvm completion" \
                     'eval "$(zvm completion bash 2>/dev/null)"'
                 ok "Added bash completion to ${shell_rc}"
@@ -211,7 +234,7 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
     echo ""
     echo ""
 
-    if [ "$needs_path" = true ]; then
+    if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
         printf "${YELLOW}  Restart your shell or run:${RESET}"
         echo ""
         echo ""
