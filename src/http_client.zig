@@ -1,6 +1,6 @@
 //! HTTP client for downloading files and fetching remote content.
 //! Uses Zig's std.http.Client for all network operations.
-//! Supports mirror-based downloads for faster distribution.
+//! Supports latency-based mirror selection for fastest downloads.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -76,23 +76,77 @@ pub fn downloadToMemory(
     return allocator.dupe(u8, body);
 }
 
-/// Attempt to download a file using community mirrors before falling back to the original URL.
-/// Mirrors are fetched from a URL that returns one mirror base URL per line.
-/// The filename is extracted from the original URL and appended to each mirror base.
+/// A candidate URL with its measured latency.
+const MirrorCandidate = struct {
+    url: []const u8,
+    latency_ns: u64,
+    owned: bool,
+};
+
+/// Measure the latency of a URL by sending a HEAD request.
+/// Returns the round-trip time in nanoseconds, or null if the request failed.
+fn measureLatency(allocator: std.mem.Allocator, url: []const u8) ?u64 {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    const uri = std.Uri.parse(url) catch return null;
+    var req = client.request(.HEAD, uri, .{
+        .redirect_behavior = .init(3),
+    }) catch return null;
+    defer req.deinit();
+
+    req.sendBodiless() catch return null;
+
+    var buf: [4096]u8 = undefined;
+    const start = std.time.Instant.now() catch return null;
+    const response = req.receiveHead(&buf) catch return null;
+    const end = std.time.Instant.now() catch return null;
+
+    // Accept 2xx status codes
+    if (response.head.status.class() != .success) return null;
+
+    return end.since(start);
+}
+
+/// Compare two MirrorCandidates by latency (for sorting).
+fn lessThanByLatency(_: void, a: MirrorCandidate, b: MirrorCandidate) bool {
+    return a.latency_ns < b.latency_ns;
+}
+
+/// Format nanoseconds as a human-readable string (e.g., "123ms", "1.2s").
+fn formatLatency(buf: []u8, ns: u64) []const u8 {
+    if (ns < 1000) {
+        return std.fmt.bufPrint(buf, "{d}ns", .{ns}) catch "?";
+    } else if (ns < 1_000_000) {
+        return std.fmt.bufPrint(buf, "{d:.0}us", .{@as(f64, @floatFromInt(ns)) / 1000.0}) catch "?";
+    } else if (ns < 1_000_000_000) {
+        return std.fmt.bufPrint(buf, "{d:.0}ms", .{@as(f64, @floatFromInt(ns)) / 1_000_000.0}) catch "?";
+    } else {
+        return std.fmt.bufPrint(buf, "{d:.1}s", .{@as(f64, @floatFromInt(ns)) / 1_000_000_000.0}) catch "?";
+    }
+}
+
+/// Select the fastest mirror by measuring latency to all candidates,
+/// then download the file from the fastest responsive source.
+/// If `verbose_writer` is provided, prints latency results for each candidate.
+/// Returns the actual URL that was successfully downloaded from (caller owns the memory).
 pub fn attemptMirrorDownload(
     allocator: std.mem.Allocator,
     mirror_list_url: []const u8,
     original_url: []const u8,
     dest_path: []const u8,
-) !void {
-    // Try original URL first if mirror list is empty
+    verbose_writer: ?*std.Io.Writer,
+) ![]const u8 {
+    // No mirror list — download directly from the original URL
     if (mirror_list_url.len == 0) {
-        return downloadToFile(allocator, original_url, dest_path);
+        try downloadToFile(allocator, original_url, dest_path);
+        return allocator.dupe(u8, original_url);
     }
 
     // Fetch the mirror list
     const mirror_list_content = downloadToMemory(allocator, mirror_list_url) catch {
-        return downloadToFile(allocator, original_url, dest_path);
+        try downloadToFile(allocator, original_url, dest_path);
+        return allocator.dupe(u8, original_url);
     };
     defer allocator.free(mirror_list_content);
 
@@ -108,26 +162,99 @@ pub fn attemptMirrorDownload(
     }
 
     if (mirrors.items.len == 0) {
-        return downloadToFile(allocator, original_url, dest_path);
+        try downloadToFile(allocator, original_url, dest_path);
+        return allocator.dupe(u8, original_url);
     }
 
-    // Extract the filename from the original URL (e.g., "zig-linux-x86_64-0.13.0.tar.xz")
+    // Extract the filename from the original URL
     const filename = if (std.mem.lastIndexOfScalar(u8, original_url, '/'))
         |idx| original_url[idx + 1 ..]
     else
         original_url;
 
-    // Try each mirror in order
+    // Build candidate list with owned URLs
+    var candidates: std.ArrayList(MirrorCandidate) = .empty;
+    defer candidates.deinit(allocator);
+
+    // Measure latency for the original URL
+    if (measureLatency(allocator, original_url)) |latency| {
+        const owned = allocator.dupe(u8, original_url) catch unreachable;
+        try candidates.append(allocator, .{ .url = owned, .latency_ns = latency, .owned = true });
+    }
+
+    // Measure latency for each mirror
     for (mirrors.items) |mirror_base| {
         const mirror_url = std.fmt.allocPrint(allocator, "{s}/{s}", .{ mirror_base, filename }) catch continue;
         defer allocator.free(mirror_url);
 
-        downloadToFile(allocator, mirror_url, dest_path) catch {
-            continue;
-        };
-        return;
+        if (measureLatency(allocator, mirror_url)) |latency| {
+            const owned_url = allocator.dupe(u8, mirror_url) catch continue;
+            try candidates.append(allocator, .{ .url = owned_url, .latency_ns = latency, .owned = true });
+        }
     }
 
-    // All mirrors failed, fall back to original URL
-    return downloadToFile(allocator, original_url, dest_path);
+    // If no candidates responded, fall back to the original URL
+    if (candidates.items.len == 0) {
+        try downloadToFile(allocator, original_url, dest_path);
+        return allocator.dupe(u8, original_url);
+    }
+
+    // Sort candidates by latency (fastest first)
+    std.mem.sort(MirrorCandidate, candidates.items, {}, lessThanByLatency);
+
+    // Print latency results if verbose output is requested
+    if (verbose_writer) |vw| {
+        var time_buf: [64]u8 = undefined;
+        try vw.print("  Probed {d} source(s):\n", .{candidates.items.len});
+        for (candidates.items, 1..) |candidate, rank| {
+            const time_str = formatLatency(&time_buf, candidate.latency_ns);
+            const marker = if (rank == 1) " <-- fastest" else "";
+            // Shorten URL for display: show only the host
+            const short_url = shortUrl(candidate.url);
+            try vw.print("    {d}. {s}  ({s}{s})\n", .{ rank, short_url, time_str, marker });
+        }
+        try vw.flush();
+    }
+
+    // Try downloading from candidates in latency order
+    for (candidates.items, 0..) |candidate, idx| {
+        downloadToFile(allocator, candidate.url, dest_path) catch {
+            continue;
+        };
+        // Success — return the winning URL (caller owns it)
+        const result = candidate.url;
+        // Free all other candidate URLs
+        for (candidates.items, 0..) |c, i| {
+            if (i != idx) allocator.free(c.url);
+        }
+        // Prevent defer from freeing the returned URL
+        candidates.items.len = 0;
+        return result;
+    }
+
+    // All candidates failed during actual download — last resort
+    for (candidates.items) |c| {
+        allocator.free(c.url);
+    }
+    candidates.items.len = 0;
+
+    try downloadToFile(allocator, original_url, dest_path);
+    return allocator.dupe(u8, original_url);
+}
+
+/// Extract the host part of a URL for concise display.
+fn shortUrl(url: []const u8) []const u8 {
+    // Skip "https://"
+    const start: usize = if (std.mem.startsWith(u8, url, "https://"))
+        "https://".len
+    else if (std.mem.startsWith(u8, url, "http://"))
+        "http://".len
+    else
+        0;
+    // Find end of host (first '/' after scheme)
+    const rest = url[start..];
+    for (rest, 0..) |ch, i| {
+        if (ch == '/') return rest[0..i];
+    }
+    return rest;
 }

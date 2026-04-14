@@ -119,18 +119,10 @@ pub const ZVM = struct {
         var link_buf: [std.fs.max_path_bytes]u8 = undefined;
         const link_path = self.binPath(&link_buf);
 
-        // Build absolute path for the symlink target
-        var full_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-        const cwd = try std.process.getCwd(&full_buf);
-        const full_path = try std.fmt.bufPrint(full_buf[cwd.len..], "/{s}", .{target});
-
-        // Copy to a clean buffer to ensure null-termination
-        var clean_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-        const clean_path = std.fmt.bufPrint(&clean_buf, "{s}{s}", .{ cwd, full_path }) catch clean_buf[0..0];
-
-        // Remove existing symlink, then create new one
+        // base_dir is always absolute (resolved from HOME), so target is already absolute.
+        // Remove existing symlink, then create new one pointing to the version directory.
         platform.removeSymlink(link_path);
-        try platform.createSymlink(clean_path, link_path);
+        try platform.createSymlink(target, link_path);
     }
 
     /// Get the currently active version by reading the ~/.zvm/bin symlink target.

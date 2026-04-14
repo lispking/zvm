@@ -115,12 +115,22 @@ fn installVersion(
     try stdout.print("Downloading Zig {s}...\n", .{version});
     try stdout.flush();
 
-    if (flags.nomirror) {
+    const actual_url = if (flags.nomirror) blk: {
         try http_client.downloadToFile(allocator, tar_url, archive_path);
-    } else {
-        http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path) catch {
+        break :blk tar_url;
+    } else blk: {
+        const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout) catch {
             try http_client.downloadToFile(allocator, tar_url, archive_path);
+            break :blk tar_url;
         };
+        break :blk mirror_url;
+    };
+
+    // Show the actual download source
+    if (actual_url.ptr != tar_url.ptr) {
+        try stdout.print("  from: {s}\n", .{actual_url});
+        try stdout.flush();
+        allocator.free(actual_url);
     }
 
     // Verify SHA256 checksum
@@ -159,7 +169,30 @@ fn installVersion(
     // Clean up the downloaded archive
     std.fs.cwd().deleteFile(archive_path) catch {};
 
+    // Clean up any leftover extracted zig-* directories
+    cleanupExtractedDirs(zvm);
+
     try terminal.printSuccess(stdout, "Installed Zig");
+
+    // Verify the installed binary can actually compile (detect platform compatibility issues)
+    try stdout.print("Verifying installation...\n", .{});
+    try stdout.flush();
+
+    if (!try verifyInstall(zvm, allocator, version)) {
+        try terminal.printWarning(stdout, "This Zig version has linking issues on your platform.");
+        try stdout.print(
+            \\This is a known issue with official Zig releases on macOS 26+.
+            \\The binary can run basic commands but cannot compile programs.
+            \\
+            \\Suggested fixes:
+            \\  1. Install the latest nightly:  zvm install master
+            \\  2. Use Mach engine builds:     zvm vmu zig mach && zvm install <version>
+            \\
+        , .{});
+        try stdout.flush();
+        return;
+    }
+
     try stdout.print("Now using Zig {s}\n", .{version});
     try stdout.flush();
 
@@ -172,6 +205,7 @@ fn installVersion(
 /// Rename the extracted archive directory to match the version name.
 /// Zig archives extract to directories like "zig-macos-x86_64-0.13.0".
 /// We rename them to just "0.13.0" for cleaner path management.
+/// If the version directory already exists (--force), it is removed first.
 fn renameExtractedDir(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
@@ -181,29 +215,106 @@ fn renameExtractedDir(
 ) !void {
     _ = allocator;
 
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const version_path = zvm.versionPath(&buf, version);
+    // Find the extracted directory (starts with "zig-" and matches both arch and os).
+    // The target string is "arch-os" (e.g., "aarch64-macos"), but archive directories
+    // use "os-arch" order (e.g., "zig-macos-aarch64-0.13.0"), so we match components separately.
+    const dash_idx = std.mem.indexOfScalar(u8, target, '-') orelse return;
+    const arch_part = target[0..dash_idx];
+    const os_part = target[dash_idx + 1 ..];
 
-    // If version directory already exists, no rename needed
-    std.fs.cwd().access(version_path, .{}) catch {
-        // Find the extracted directory (starts with "zig-" and contains platform target)
-        var dir = std.fs.cwd().openDir(zvm.base_dir, .{ .iterate = true }) catch return;
-        defer dir.close();
+    var dir = std.fs.cwd().openDir(zvm.base_dir, .{ .iterate = true }) catch return;
+    defer dir.close();
 
-        var iter = dir.iterate();
-        while (try iter.next()) |entry| {
-            if (entry.kind != .directory) continue;
-            if (std.mem.startsWith(u8, entry.name, "zig-") and
-                std.mem.containsAtLeast(u8, entry.name, 1, target))
-            {
-                dir.rename(entry.name, version) catch {
-                    try terminal.printError(stderr, "Failed to rename extracted directory");
-                    return;
-                };
-                return;
-            }
+    var found: ?[]const u8 = null;
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.startsWith(u8, entry.name, "zig-") and
+            std.mem.containsAtLeast(u8, entry.name, 1, arch_part) and
+            std.mem.containsAtLeast(u8, entry.name, 1, os_part))
+        {
+            found = entry.name;
+            break;
         }
+    }
+
+    // No extracted directory found — version dir may already exist
+    if (found == null) return;
+
+    // Remove existing version directory if it exists (for --force reinstalls)
+    var version_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const version_path = zvm.versionPath(&version_buf, version);
+    std.fs.cwd().deleteTree(version_path) catch {};
+
+    // Rename the extracted directory to the version name
+    dir.rename(found.?, version) catch {
+        try terminal.printError(stderr, "Failed to rename extracted directory");
+        return;
     };
+}
+
+/// Remove any leftover zig-* directories from failed or interrupted extractions.
+fn cleanupExtractedDirs(zvm: *zvm_mod.ZVM) void {
+    var dir = std.fs.cwd().openDir(zvm.base_dir, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch return) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.startsWith(u8, entry.name, "zig-")) {
+            var buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+            const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ zvm.base_dir, entry.name }) catch continue;
+            std.fs.cwd().deleteTree(path) catch {};
+        }
+    }
+}
+
+/// Verify the installed Zig binary can actually compile programs.
+/// Creates a minimal Zig source file, compiles it, and checks for linking errors.
+/// Returns true if the binary works correctly, false if it has platform compatibility issues.
+fn verifyInstall(
+    zvm: *zvm_mod.ZVM,
+    allocator: std.mem.Allocator,
+    version: []const u8,
+) !bool {
+    var ver_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const ver_path = zvm.versionPath(&ver_buf, version);
+    const zig_path = try std.fmt.allocPrint(allocator, "{s}/zig", .{ver_path});
+    defer allocator.free(zig_path);
+
+    // Create a temporary test file in the zvm base directory
+    var test_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+    const test_path = try std.fmt.bufPrint(&test_buf, "{s}/_zvm_smoke_test.zig", .{zvm.base_dir});
+    defer std.fs.cwd().deleteFile(test_path) catch {};
+
+    const test_file = try std.fs.cwd().createFile(test_path, .{});
+    defer test_file.close();
+    var test_writer_buf: [256]u8 = undefined;
+    var test_writer = test_file.writer(&test_writer_buf);
+    try test_writer.interface.writeAll("pub fn main() void {}\n");
+    try test_writer.interface.flush();
+
+    // Try to compile the test file
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ zig_path, "build-exe", test_path, "-fno-emit-bin" },
+        .max_output_bytes = 4096,
+    }) catch return false;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Check for linking errors (undefined symbol errors indicate platform incompatibility)
+    if (result.term == .Exited and result.term.Exited == 0) {
+        return true;
+    }
+
+    // Check stderr for "undefined symbol" — indicates macOS 26+ linking issue
+    if (std.mem.containsAtLeast(u8, result.stderr, 1, "undefined symbol")) {
+        return false;
+    }
+
+    // Other errors — might be a real issue, but not a platform compat problem
+    return true;
 }
 
 /// Install ZLS (Zig Language Server) for a specific Zig version.
