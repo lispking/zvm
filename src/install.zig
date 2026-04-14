@@ -103,10 +103,7 @@ fn installVersion(
     };
 
     // Determine local archive filename from the download URL
-    const archive_name = if (std.mem.lastIndexOfScalar(u8, tar_url, '/'))
-        |idx| tar_url[idx + 1 ..]
-    else
-        "zig-archive";
+    const archive_name = if (std.mem.lastIndexOfScalar(u8, tar_url, '/')) |idx| tar_url[idx + 1 ..] else "zig-archive";
 
     var archive_path_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const archive_path = try std.fmt.bufPrint(&archive_path_buf, "{s}/{s}", .{ zvm.base_dir, archive_name });
@@ -119,7 +116,7 @@ fn installVersion(
         try http_client.downloadToFile(allocator, tar_url, archive_path);
         break :blk tar_url;
     } else blk: {
-        const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout) catch {
+        const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout, &zvm.settings) catch {
             try http_client.downloadToFile(allocator, tar_url, archive_path);
             break :blk tar_url;
         };
@@ -328,7 +325,6 @@ fn installZls(
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
-
     try stdout.print("Installing ZLS for Zig {s}...\n", .{version});
     try stdout.flush();
 
@@ -411,10 +407,7 @@ fn installZls(
     };
 
     // Download ZLS archive
-    const zls_archive_name = if (std.mem.lastIndexOfScalar(u8, zls_tarball, '/'))
-        |idx| zls_tarball[idx + 1 ..]
-    else
-        "zls-archive";
+    const zls_archive_name = if (std.mem.lastIndexOfScalar(u8, zls_tarball, '/')) |idx| zls_tarball[idx + 1 ..] else "zls-archive";
 
     var archive_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const zls_archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/{s}", .{ zvm.base_dir, zls_archive_name });
