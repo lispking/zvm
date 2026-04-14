@@ -16,6 +16,10 @@ pub const Settings = struct {
     use_color: bool,
     /// Whether to always force reinstall without prompting.
     always_force_install: bool,
+    /// Cached preferred mirror base URL (empty = no cache).
+    preferred_mirror: []const u8,
+    /// Unix timestamp (seconds) when the preferred mirror was last validated.
+    mirror_updated_at: i64,
 
     /// Internal path to the settings JSON file (not serialized).
     path: ?[]const u8,
@@ -27,6 +31,8 @@ pub const Settings = struct {
         .mirror_list_url = "https://ziglang.org/download/community-mirrors.txt",
         .use_color = true,
         .always_force_install = false,
+        .preferred_mirror = "",
+        .mirror_updated_at = 0,
         .path = null,
     };
 
@@ -37,6 +43,8 @@ pub const Settings = struct {
         mirror_list_url: []const u8,
         use_color: bool,
         always_force_install: bool,
+        preferred_mirror: []const u8 = "",
+        mirror_updated_at: i64 = 0,
     };
 
     /// Load settings from a JSON file, or create with defaults if not found.
@@ -77,6 +85,8 @@ pub const Settings = struct {
             .mirror_list_url = try allocator.dupe(u8, val.mirror_list_url),
             .use_color = val.use_color,
             .always_force_install = val.always_force_install,
+            .preferred_mirror = try allocator.dupe(u8, val.preferred_mirror),
+            .mirror_updated_at = val.mirror_updated_at,
             .path = path,
         };
 
@@ -97,6 +107,8 @@ pub const Settings = struct {
             .mirror_list_url = self.mirror_list_url,
             .use_color = self.use_color,
             .always_force_install = self.always_force_install,
+            .preferred_mirror = self.preferred_mirror,
+            .mirror_updated_at = self.mirror_updated_at,
         };
 
         // Ensure parent directory exists
@@ -181,5 +193,23 @@ pub const Settings = struct {
     pub fn toggleColor(self: *Settings, allocator: std.mem.Allocator) !void {
         self.use_color = !self.use_color;
         try self.save(allocator);
+    }
+
+    /// Update the cached preferred mirror and persist immediately.
+    pub fn setPreferredMirror(self: *Settings, allocator: std.mem.Allocator, base_url: []const u8) void {
+        const old = self.preferred_mirror;
+        self.preferred_mirror = allocator.dupe(u8, base_url) catch return;
+        self.mirror_updated_at = std.time.timestamp();
+        self.save(allocator) catch {};
+        if (old.len > 0) allocator.free(old);
+    }
+
+    /// Clear the cached preferred mirror (e.g., when it fails).
+    pub fn clearPreferredMirror(self: *Settings, allocator: std.mem.Allocator) void {
+        const old = self.preferred_mirror;
+        self.preferred_mirror = "";
+        self.mirror_updated_at = 0;
+        self.save(allocator) catch {};
+        if (old.len > 0) allocator.free(old);
     }
 };

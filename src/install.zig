@@ -119,7 +119,7 @@ fn installVersion(
         try http_client.downloadToFile(allocator, tar_url, archive_path);
         break :blk tar_url;
     } else blk: {
-        const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout) catch {
+        const mirror_url = http_client.attemptMirrorDownload(allocator, zvm.settings.mirror_list_url, tar_url, archive_path, stdout, &zvm.settings) catch {
             try http_client.downloadToFile(allocator, tar_url, archive_path);
             break :blk tar_url;
         };

@@ -1,9 +1,14 @@
 //! HTTP client for downloading files and fetching remote content.
 //! Uses Zig's std.http.Client for all network operations.
 //! Supports latency-based mirror selection for fastest downloads.
+//! Caches preferred mirror in settings to skip probing on subsequent installs.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const settings_mod = @import("settings.zig");
+
+/// Cache TTL: 24 hours in seconds.
+const MIRROR_CACHE_TTL: i64 = 86400;
 
 /// Download a file from a URL to the given file path.
 /// Uses streaming to handle large files without loading everything into memory.
@@ -128,7 +133,8 @@ fn formatLatency(buf: []u8, ns: u64) []const u8 {
 
 /// Select the fastest mirror by measuring latency to all candidates,
 /// then download the file from the fastest responsive source.
-/// If `verbose_writer` is provided, prints latency results for each candidate.
+/// If a cached preferred mirror is fresh (< 24h), try it directly first
+/// to skip the probing overhead entirely.
 /// Returns the actual URL that was successfully downloaded from (caller owns the memory).
 pub fn attemptMirrorDownload(
     allocator: std.mem.Allocator,
@@ -136,6 +142,55 @@ pub fn attemptMirrorDownload(
     original_url: []const u8,
     dest_path: []const u8,
     verbose_writer: ?*std.Io.Writer,
+    settings: *settings_mod.Settings,
+) ![]const u8 {
+    // Extract filename once (used for constructing mirror URLs and extracting base URL)
+    const filename = if (std.mem.lastIndexOfScalar(u8, original_url, '/'))
+        |idx| original_url[idx + 1 ..]
+    else
+        original_url;
+
+    // --- Cache-fast path: try cached mirror if fresh ---
+    if (settings.preferred_mirror.len > 0 and settings.mirror_updated_at > 0) {
+        const now = std.time.timestamp();
+        const age = now - settings.mirror_updated_at;
+        if (age >= 0 and age < MIRROR_CACHE_TTL) {
+            const cached_url = std.fmt.allocPrint(allocator, "{s}/{s}", .{ settings.preferred_mirror, filename }) catch
+                return try probeAndDownload(allocator, mirror_list_url, original_url, filename, dest_path, verbose_writer, settings);
+            defer allocator.free(cached_url);
+
+            downloadToFile(allocator, cached_url, dest_path) catch {
+                // Cached mirror failed — clear cache and fall through to full probe
+                settings.clearPreferredMirror(allocator);
+                if (verbose_writer) |vw| {
+                    try vw.print("  Cached mirror unavailable, re-probing...\n", .{});
+                    try vw.flush();
+                }
+                return try probeAndDownload(allocator, mirror_list_url, original_url, filename, dest_path, verbose_writer, settings);
+            };
+
+            if (verbose_writer) |vw| {
+                try vw.print("  from: {s} (cached)\n", .{shortUrl(settings.preferred_mirror)});
+                try vw.flush();
+            }
+            return allocator.dupe(u8, cached_url);
+        }
+    }
+
+    // No cache or stale — full probe
+    return try probeAndDownload(allocator, mirror_list_url, original_url, filename, dest_path, verbose_writer, settings);
+}
+
+/// Full probe: fetch mirror list, measure latency for all candidates, download from fastest.
+/// Caches the winning mirror base URL in settings on success.
+fn probeAndDownload(
+    allocator: std.mem.Allocator,
+    mirror_list_url: []const u8,
+    original_url: []const u8,
+    filename: []const u8,
+    dest_path: []const u8,
+    verbose_writer: ?*std.Io.Writer,
+    settings: *settings_mod.Settings,
 ) ![]const u8 {
     // No mirror list — download directly from the original URL
     if (mirror_list_url.len == 0) {
@@ -165,12 +220,6 @@ pub fn attemptMirrorDownload(
         try downloadToFile(allocator, original_url, dest_path);
         return allocator.dupe(u8, original_url);
     }
-
-    // Extract the filename from the original URL
-    const filename = if (std.mem.lastIndexOfScalar(u8, original_url, '/'))
-        |idx| original_url[idx + 1 ..]
-    else
-        original_url;
 
     // Build candidate list with owned URLs
     var candidates: std.ArrayList(MirrorCandidate) = .empty;
@@ -221,7 +270,12 @@ pub fn attemptMirrorDownload(
         downloadToFile(allocator, candidate.url, dest_path) catch {
             continue;
         };
-        // Success — return the winning URL (caller owns it)
+        // Success — cache the winning mirror base URL for next time
+        const base_url = extractBaseUrl(candidate.url);
+        if (base_url.len > 0) {
+            settings.setPreferredMirror(allocator, base_url);
+        }
+        // Return the winning URL (caller owns it)
         const result = candidate.url;
         // Free all other candidate URLs
         for (candidates.items, 0..) |c, i| {
@@ -240,6 +294,15 @@ pub fn attemptMirrorDownload(
 
     try downloadToFile(allocator, original_url, dest_path);
     return allocator.dupe(u8, original_url);
+}
+
+/// Extract the base URL (scheme + host + path up to last '/') from a full URL.
+/// e.g. "https://mirror.example.com/path/file.tar.gz" → "https://mirror.example.com/path"
+fn extractBaseUrl(url: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, url, '/')) |idx| {
+        return url[0..idx];
+    }
+    return url;
 }
 
 /// Extract the host part of a URL for concise display.
