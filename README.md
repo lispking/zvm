@@ -1,6 +1,10 @@
 # zvm — Zig Version Manager
 
-A fast, dependency-free version manager for [Zig](https://ziglang.org/), written entirely in Zig 0.15.x.
+[![Release](https://github.com/lispking/zvm/actions/workflows/release.yml/badge.svg)](https://github.com/lispking/zvm/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Zig](https://img.shields.io/badge/Zig-0.15.x-orange.svg)](https://ziglang.org)
+
+A fast, dependency-free version manager for [Zig](https://ziglang.org/), written entirely in Zig.
 
 Manage multiple Zig compiler installations, switch between versions instantly, and keep your toolchain up to date — all with a single static binary.
 
@@ -8,7 +12,7 @@ Manage multiple Zig compiler installations, switch between versions instantly, a
 
 - **Zero dependencies** — single static binary, no runtime requirements
 - **Cross-platform** — macOS, Linux, Windows (x86_64 and aarch64)
-- **Fast downloads** — community mirror support for faster distribution
+- **Fast downloads** — latency-based mirror selection picks the fastest source automatically
 - **SHA256 verification** — every download is checksum-verified
 - **ZLS support** — install the Zig Language Server alongside Zig
 - **Shell completion** — tab completion for zsh and bash
@@ -74,7 +78,6 @@ zvm list
 
 # List all available remote versions
 zvm available
-# or: zvm list --all, zvm remote
 
 # Run a specific version without switching default
 zvm run 0.13.0 build run
@@ -189,19 +192,20 @@ eval "$(zvm completion bash)"
 
 ```
 ~/.zvm/
-├── bin          → symlink to the active version directory
-├── 0.15.2/      → Zig 0.15.2 installation
-│   └── zig      → Zig compiler binary
-├── 0.14.0/      → Zig 0.14.0 installation
+├── bin            → symlink/junction to the active version directory
+├── .active        → marker file tracking the active version name
+├── 0.15.2/        → Zig 0.15.2 installation
+│   └── zig        → Zig compiler binary
+├── 0.14.0/        → Zig 0.14.0 installation
 │   └── zig
-├── master/      → Latest nightly build
+├── master/        → Latest nightly build
 │   └── zig
-├── self/        → zvm's own data
-└── settings.json → Configuration file
+├── self/          → zvm's own data
+└── settings.json  → Configuration file
 ```
 
-- **Version switching** uses symbolic links — `~/.zvm/bin` points to the active version's directory
-- **Downloads** are streamed directly to disk with SHA256 verification
+- **Version switching** uses symbolic links (junctions on Windows) — `~/.zvm/bin` points to the active version's directory
+- **Downloads** are streamed to disk with SHA256 verification and latency-based mirror selection
 - **Settings** are persisted immediately on every change to `~/.zvm/settings.json`
 - **No background services** — zvm runs only when you invoke it
 
@@ -234,13 +238,22 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-This creates a GitHub Release with pre-built binaries for:
-- `zvm-macos-x86_64.tar.gz`
-- `zvm-macos-aarch64.tar.gz`
-- `zvm-linux-x86_64.tar.gz`
-- `zvm-linux-aarch64.tar.gz`
-- `zvm-windows-x86_64.tar.gz`
-- `zvm-windows-aarch64.tar.gz`
+This creates two GitHub Releases:
+- **Versioned release** with `zvm-v0.1.0-<platform>.tar.gz` assets
+- **`latest` release** with stable-named assets for permalink downloads
+
+Stable download URLs (always point to the latest version):
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `zvm-aarch64-macos.tar.gz` |
+| macOS (Intel) | `zvm-x86_64-macos.tar.gz` |
+| Linux (x86_64) | `zvm-x86_64-linux.tar.gz` |
+| Linux (ARM64) | `zvm-aarch64-linux.tar.gz` |
+| Windows (x86_64) | `zvm-x86_64-windows.zip` |
+| Windows (ARM64) | `zvm-aarch64-windows.zip` |
+
+All available at `https://github.com/lispking/zvm/releases/latest/download/<file>`
 
 ## Project Structure
 
@@ -278,8 +291,9 @@ This is a rewrite of [tristanisham/zvm](https://github.com/tristanisham/zvm) (Go
 | Binary size | ~10MB | ~1-2MB |
 | Dependencies | Go runtime | None (static) |
 | Build tool | Go compiler | Zig compiler |
-| Shell completion | Yes | Yes (zsh, bash) |
-| Mirror support | Yes | Yes |
+| Shell completion | No | Yes (zsh, bash) |
+| Mirror selection | Sequential | Latency-based |
+| Windows support | Yes | Yes (junctions) |
 
 ## License
 
