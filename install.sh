@@ -187,22 +187,48 @@ main() {
         ok "Install directory already in PATH"
     fi
 
-    if [ -n "$shell_rc" ]; then
-        if [ "$needs_local_bin" = true ]; then
-            append_once "$shell_rc" "# >>> zvm >>>" \
-                "# >>> zvm >>>
+    if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
+        if [ -n "$shell_rc" ]; then
+            echo ""
+            info "The following PATH entries will be added to ${shell_rc}:"
+            [ "$needs_local_bin" = true ]  && echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+            [ "$needs_zvm_bin" = true ]    && echo "    export PATH=\"\${ZVM_PATH:-\${XDG_DATA_HOME:-\$HOME/.local/share}/zvm}/bin:\$PATH\""
+            echo ""
+            local do_modify="n"
+            if [ -t 0 ] || [ -e /dev/tty ]; then
+                printf "${CYAN}>>>${RESET} Add to shell config? [Y/n] "
+                read -r answer < /dev/tty 2>/dev/null || answer="Y"
+                case "${answer:-Y}" in
+                    [Yy]|[Yy][Ee][Ss]|"") do_modify="y" ;;
+                    *) do_modify="n" ;;
+                esac
+            else
+                # Non-interactive (piped): auto-add and inform the user
+                do_modify="y"
+            fi
+
+            if [ "$do_modify" = "y" ]; then
+                if [ "$needs_local_bin" = true ]; then
+                    append_once "$shell_rc" "# >>> zvm >>>" \
+                        "# >>> zvm >>>
 export PATH=\"\${HOME}/.local/bin:\$PATH\""
-        fi
-        if [ "$needs_zvm_bin" = true ]; then
-            append_once "$shell_rc" "# <<< zvm <<<" \
-                "export PATH=\"\${ZVM_PATH:-\${XDG_DATA_HOME:-\$HOME/.local/share}/zvm}/bin:\$PATH\"
+                fi
+                if [ "$needs_zvm_bin" = true ]; then
+                    append_once "$shell_rc" "# <<< zvm <<<" \
+                        "export PATH=\"\${ZVM_PATH:-\${XDG_DATA_HOME:-\$HOME/.local/share}/zvm}/bin:\$PATH\"
 # <<< zvm <<<"
-        fi
-        if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
-            ok "Added PATH entries to ${shell_rc}"
-        fi
-    else
-        if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
+                fi
+                ok "Added PATH entries to ${shell_rc}"
+            else
+                warn "Skipped shell config modification."
+                echo ""
+                echo "  Add these lines to your shell config manually:"
+                echo ""
+                echo '    export PATH="$HOME/.local/bin:$PATH"'
+                echo '    export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/zvm/bin:$PATH"'
+                echo ""
+            fi
+        else
             warn "Could not detect shell config file."
             warn "Add these lines to your shell config manually:"
             echo ""
@@ -214,18 +240,41 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
 
     # 8. Set up shell completion
     if [ -n "$shell_rc" ]; then
-        case "$shell_rc" in
-            */.zshrc)
-                append_once "$shell_rc" "# zvm completion" \
-                    'eval "$(zvm completion zsh 2>/dev/null)"'
-                ok "Added zsh completion to ${shell_rc}"
-                ;;
-            */.bashrc)
-                append_once "$shell_rc" "# zvm completion" \
-                    'eval "$(zvm completion bash 2>/dev/null)"'
-                ok "Added bash completion to ${shell_rc}"
-                ;;
-        esac
+        local do_completion="n"
+        if [ -t 0 ] || [ -e /dev/tty ]; then
+            local comp_label=""
+            case "$shell_rc" in
+                */.zshrc)  comp_label="zsh" ;;
+                */.bashrc) comp_label="bash" ;;
+            esac
+            if [ -n "$comp_label" ]; then
+                printf "${CYAN}>>>${RESET} Add ${comp_label} completion to ${shell_rc}? [Y/n] "
+                read -r answer < /dev/tty 2>/dev/null || answer="Y"
+                case "${answer:-Y}" in
+                    [Yy]|[Yy][Ee][Ss]|"") do_completion="y" ;;
+                    *) do_completion="n" ;;
+                esac
+            fi
+        else
+            do_completion="y"
+        fi
+
+        if [ "$do_completion" = "y" ]; then
+            case "$shell_rc" in
+                */.zshrc)
+                    append_once "$shell_rc" "# zvm completion" \
+                        'eval "$(zvm completion zsh 2>/dev/null)"'
+                    ok "Added zsh completion to ${shell_rc}"
+                    ;;
+                */.bashrc)
+                    append_once "$shell_rc" "# zvm completion" \
+                        'eval "$(zvm completion bash 2>/dev/null)"'
+                    ok "Added bash completion to ${shell_rc}"
+                    ;;
+            esac
+        else
+            warn "Skipped shell completion setup."
+        fi
     fi
 
     # 9. Done
