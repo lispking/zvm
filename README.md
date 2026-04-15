@@ -2,7 +2,7 @@
 
 [![Release](https://github.com/lispking/zvm/actions/workflows/release.yml/badge.svg)](https://github.com/lispking/zvm/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Zig](https://img.shields.io/badge/Zig-0.15.x-orange.svg)](https://ziglang.org)
+[![Zig](https://img.shields.io/badge/Zig-0.16.x-orange.svg)](https://ziglang.org)
 
 A fast, dependency-free version manager for [Zig](https://ziglang.org/), written entirely in Zig.
 
@@ -49,7 +49,7 @@ cd zvm-*/ && sudo mv zvm /usr/local/bin/
 
 ### Build from Source
 
-Requirements: [Zig 0.15.x](https://ziglang.org/download/)
+Requirements: [Zig 0.16.x](https://ziglang.org/download/)
 
 ```bash
 git clone https://github.com/lispking/zvm.git
