@@ -407,7 +407,7 @@ pub fn printCommandHelp(writer: *std.Io.Writer, cmd: Command) !void {
             \\
         ),
         .clean => try writer.writeAll(
-            \\Remove build artifacts from ~/.zvm/
+            \\Remove build artifacts from the cache directory.
             \\
             \\Usage:
             \\  zvm clean

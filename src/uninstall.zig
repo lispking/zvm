@@ -1,5 +1,5 @@
 //! Uninstall command — remove an installed Zig version.
-//! Deletes the version directory from ~/.zvm/ and warns if it's the active version.
+//! Deletes the version directory from the data directory and warns if it's the active version.
 
 const std = @import("std");
 const zvm_mod = @import("zvm.zig");

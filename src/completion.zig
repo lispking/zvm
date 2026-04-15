@@ -106,7 +106,7 @@ fn writeZshCompletion(writer: *std.Io.Writer) !void {
         \\
         \\_zvm_installed_versions() {
         \\  local -a versions
-        \\  local zvm_dir="${ZVM_PATH:-$HOME/.zvm}"
+        \\  local zvm_dir="${ZVM_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/zvm}"
         \\  if [[ -d "$zvm_dir" ]]; then
         \\    for dir in "$zvm_dir"/*/; do
         \\      local ver=$(basename "$dir")
@@ -222,7 +222,7 @@ fn writeBashCompletion(writer: *std.Io.Writer) !void {
         \\}
         \\
         \\_zvm_list_versions() {
-        \\  local zvm_dir="${ZVM_PATH:-$HOME/.zvm}"
+        \\  local zvm_dir="${ZVM_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/zvm}"
         \\  local -a versions=()
         \\  if [[ -d "$zvm_dir" ]]; then
         \\    for dir in "$zvm_dir"/*/; do

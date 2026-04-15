@@ -105,7 +105,7 @@ fn installVersion(
     const archive_name = if (std.mem.lastIndexOfScalar(u8, tar_url, '/')) |idx| tar_url[idx + 1 ..] else "zig-archive";
 
     var archive_path_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const archive_path = try std.fmt.bufPrint(&archive_path_buf, "{s}/{s}", .{ zvm.base_dir, archive_name });
+    const archive_path = try std.fmt.bufPrint(&archive_path_buf, "{s}/{s}", .{ zvm.cache_dir, archive_name });
 
     // Download archive (with optional mirror support)
     try stdout.print("Downloading Zig {s}...\n", .{version});
@@ -151,7 +151,7 @@ fn installVersion(
     try stdout.print("Extracting...\n", .{});
     try stdout.flush();
 
-    archive.extractArchive(allocator, zvm.io, archive_path, zvm.base_dir) catch {
+    archive.extractArchive(allocator, zvm.io, archive_path, zvm.data_dir) catch {
         try terminal.printError(stderr, "Failed to extract archive");
         return error.ExtractionFailed;
     };
@@ -218,7 +218,7 @@ fn renameExtractedDir(
     const arch_part = target[0..dash_idx];
     const os_part = target[dash_idx + 1 ..];
 
-    var dir = std.Io.Dir.cwd().openDir(zvm.io, zvm.base_dir, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd().openDir(zvm.io, zvm.data_dir, .{ .iterate = true }) catch return;
     defer dir.close(zvm.io);
 
     var found: ?[]const u8 = null;
@@ -251,7 +251,7 @@ fn renameExtractedDir(
 
 /// Remove any leftover zig-* directories from failed or interrupted extractions.
 fn cleanupExtractedDirs(zvm: *zvm_mod.ZVM) void {
-    var dir = std.Io.Dir.cwd().openDir(zvm.io, zvm.base_dir, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd().openDir(zvm.io, zvm.data_dir, .{ .iterate = true }) catch return;
     defer dir.close(zvm.io);
 
     var iter = dir.iterate();
@@ -259,7 +259,7 @@ fn cleanupExtractedDirs(zvm: *zvm_mod.ZVM) void {
         if (entry.kind != .directory) continue;
         if (std.mem.startsWith(u8, entry.name, "zig-")) {
             var buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-            const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ zvm.base_dir, entry.name }) catch continue;
+            const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ zvm.data_dir, entry.name }) catch continue;
             std.Io.Dir.cwd().deleteTree(zvm.io, path) catch {};
         }
     }
@@ -278,9 +278,9 @@ fn verifyInstall(
     const zig_path = try std.fmt.allocPrint(allocator, "{s}/zig", .{ver_path});
     defer allocator.free(zig_path);
 
-    // Create a temporary test file in the zvm base directory
+    // Create a temporary test file in the cache directory
     var test_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const test_path = try std.fmt.bufPrint(&test_buf, "{s}/_zvm_smoke_test.zig", .{zvm.base_dir});
+    const test_path = try std.fmt.bufPrint(&test_buf, "{s}/_zvm_smoke_test.zig", .{zvm.cache_dir});
     defer std.Io.Dir.cwd().deleteFile(zvm.io, test_path) catch {};
 
     const test_file = try std.Io.Dir.cwd().createFile(zvm.io, test_path, .{});
@@ -407,13 +407,13 @@ fn installZls(
     const zls_archive_name = if (std.mem.lastIndexOfScalar(u8, zls_tarball, '/')) |idx| zls_tarball[idx + 1 ..] else "zls-archive";
 
     var archive_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const zls_archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/{s}", .{ zvm.base_dir, zls_archive_name });
+    const zls_archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/{s}", .{ zvm.cache_dir, zls_archive_name });
 
     try http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, zls_tarball, zls_archive_path, zvm.settings.proxy);
 
     // Extract to a temporary directory
     var temp_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const temp_dir = try std.fmt.bufPrint(&temp_buf, "{s}/zls-temp", .{zvm.base_dir});
+    const temp_dir = try std.fmt.bufPrint(&temp_buf, "{s}/zls-temp", .{zvm.cache_dir});
     std.Io.Dir.cwd().createDirPath(zvm.io, temp_dir) catch {};
 
     archive.extractArchive(allocator, zvm.io, zls_archive_path, temp_dir) catch {
@@ -437,12 +437,12 @@ fn installZls(
             var inner_iter = inner_dir.iterate();
             while (try inner_iter.next(zvm.io)) |inner_entry| {
                 if (std.mem.eql(u8, inner_entry.name, "zls") or std.mem.eql(u8, inner_entry.name, "zls.exe")) {
-                    // Copy the zls binary to ~/.zvm/<version>/zls
+                    // Copy the zls binary to data_dir/<version>/zls
                     var src_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
                     const src = try std.fmt.bufPrint(&src_buf, "{s}/{s}/{s}", .{ temp_dir, entry.name, inner_entry.name });
 
                     var dst_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-                    const dst = try std.fmt.bufPrint(&dst_buf, "{s}/{s}/zls", .{ zvm.base_dir, version });
+                    const dst = try std.fmt.bufPrint(&dst_buf, "{s}/{s}/zls", .{ zvm.data_dir, version });
 
                     const src_file = std.Io.Dir.cwd().openFile(zvm.io, src, .{}) catch continue;
                     defer src_file.close(zvm.io);

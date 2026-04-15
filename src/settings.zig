@@ -1,5 +1,5 @@
 //! Settings persistence for zvm.
-//! Manages the JSON configuration file (~/.zvm/settings.json) with
+//! Manages the JSON configuration file ($XDG_CONFIG_HOME/zvm/settings.json) with
 //! eager persistence — every mutation immediately writes to disk.
 
 const std = @import("std");

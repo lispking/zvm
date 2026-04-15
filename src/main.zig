@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     };
 
-    // Initialize ZVM environment (~/.zvm, settings, etc.)
+    // Initialize ZVM environment (XDG dirs, settings, etc.)
     var zvm = zvm_mod.ZVM.init(allocator, init.io, init.environ_map) catch {
         var stderr_buf: [4096]u8 = undefined;
         var stderr_writer = std.Io.File.stderr().writer(init.io, &stderr_buf);

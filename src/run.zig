@@ -26,7 +26,7 @@ pub fn run(
         std.process.exit(1);
     }
 
-    // Build the zig binary path: ~/.zvm/<version>/zig
+    // Build the zig binary path: data_dir/<version>/zig
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const version_dir = zvm.versionPath(&path_buf, version);
     const zig_path = try std.fmt.allocPrint(allocator, "{s}/zig", .{version_dir});

@@ -103,15 +103,9 @@ pub fn removeSymlink(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
-/// Resolve the user's home directory.
-/// Checks ZVM_PATH env var first, then falls back to HOME (or USERPROFILE on Windows).
+/// Resolve the home directory (used as fallback for XDG defaults).
 /// Caller owns the returned memory.
-pub fn getHomeDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
-    // Try ZVM_PATH first, then HOME
-    if (environ_map.get("ZVM_PATH")) |path| {
-        return allocator.dupe(u8, path);
-    }
-
+fn getHomeDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
     if (builtin.os.tag == .windows) {
         if (environ_map.get("USERPROFILE")) |path| {
             return allocator.dupe(u8, path);
@@ -122,6 +116,66 @@ pub fn getHomeDir(allocator: std.mem.Allocator, environ_map: *std.process.Enviro
         return allocator.dupe(u8, path);
     }
     return error.FileNotFound;
+}
+
+/// Resolve the XDG config directory.
+/// Checks XDG_CONFIG_HOME, falls back to $HOME/.config.
+/// On Windows, falls back to %APPDATA% or %USERPROFILE%/.config.
+/// Caller owns the returned memory.
+pub fn getConfigDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
+    if (environ_map.get("XDG_CONFIG_HOME")) |path| {
+        if (path.len > 0) return allocator.dupe(u8, path);
+    }
+
+    if (builtin.os.tag == .windows) {
+        if (environ_map.get("APPDATA")) |path| {
+            if (path.len > 0) return allocator.dupe(u8, path);
+        }
+    }
+
+    const home = try getHomeDir(allocator, environ_map);
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+}
+
+/// Resolve the XDG data directory.
+/// Checks ZVM_PATH (legacy override) first, then XDG_DATA_HOME,
+/// falls back to $HOME/.local/share.
+/// On Windows, falls back to %USERPROFILE%/.local/share.
+/// Caller owns the returned memory.
+pub fn getDataDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
+    // Legacy ZVM_PATH override — use as-is (user already specifies full path)
+    if (environ_map.get("ZVM_PATH")) |path| {
+        if (path.len > 0) return allocator.dupe(u8, path);
+    }
+
+    if (environ_map.get("XDG_DATA_HOME")) |path| {
+        if (path.len > 0) return allocator.dupe(u8, path);
+    }
+
+    const home = try getHomeDir(allocator, environ_map);
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.local/share", .{home});
+}
+
+/// Resolve the XDG cache directory.
+/// Checks XDG_CACHE_HOME, falls back to $HOME/.cache.
+/// On Windows, falls back to %LOCALAPPDATA% or %USERPROFILE%/.cache.
+/// Caller owns the returned memory.
+pub fn getCacheDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
+    if (environ_map.get("XDG_CACHE_HOME")) |path| {
+        if (path.len > 0) return allocator.dupe(u8, path);
+    }
+
+    if (builtin.os.tag == .windows) {
+        if (environ_map.get("LOCALAPPDATA")) |path| {
+            if (path.len > 0) return allocator.dupe(u8, path);
+        }
+    }
+
+    const home = try getHomeDir(allocator, environ_map);
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.cache", .{home});
 }
 
 /// Build the target-specific platform string used in Zig download URLs.

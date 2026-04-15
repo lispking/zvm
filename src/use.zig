@@ -1,5 +1,5 @@
 //! Use command — switch the active Zig version.
-//! Updates the ~/.zvm/bin symlink to point to the requested version directory.
+//! Updates the bin symlink in the data directory to point to the requested version directory.
 
 const std = @import("std");
 const zvm_mod = @import("zvm.zig");

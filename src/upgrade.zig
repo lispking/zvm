@@ -202,7 +202,7 @@ pub fn run(
 
     // Download the release archive
     var buf1: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const self_dir = try std.fmt.bufPrint(&buf1, "{s}/self", .{zvm.base_dir});
+    const self_dir = try std.fmt.bufPrint(&buf1, "{s}/self", .{zvm.data_dir});
     std.Io.Dir.cwd().createDirPath(zvm.io, self_dir) catch {};
 
     var buf2: [std.fs.max_path_bytes * 2]u8 = undefined;

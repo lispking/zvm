@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO="lispking/zvm"
 INSTALL_DIR="${ZVM_INSTALL:-$HOME/.local/bin}"
-ZVM_DIR="$HOME/.zvm"
+ZVM_DIR="${ZVM_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/zvm}"
 
 # ── Colors ──────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -195,7 +195,7 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
         fi
         if [ "$needs_zvm_bin" = true ]; then
             append_once "$shell_rc" "# <<< zvm <<<" \
-                "export PATH=\"\${ZVM_DIR:-\$HOME/.zvm}/bin:\$PATH\"
+                "export PATH=\"\${ZVM_PATH:-\${XDG_DATA_HOME:-\$HOME/.local/share}/zvm}/bin:\$PATH\"
 # <<< zvm <<<"
         fi
         if [ "$needs_local_bin" = true ] || [ "$needs_zvm_bin" = true ]; then
@@ -207,7 +207,7 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
             warn "Add these lines to your shell config manually:"
             echo ""
             echo '  export PATH="$HOME/.local/bin:$PATH"'
-            echo '  export PATH="$HOME/.zvm/bin:$PATH"'
+            echo '  export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/zvm/bin:$PATH"'
             echo ""
         fi
     fi
@@ -242,7 +242,7 @@ export PATH=\"\${HOME}/.local/bin:\$PATH\""
             echo "    source ${shell_rc}"
         else
             echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-            echo "    export PATH=\"\$HOME/.zvm/bin:\$PATH\""
+            echo "    export PATH=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/zvm/bin:\$PATH\""
         fi
         echo ""
     fi

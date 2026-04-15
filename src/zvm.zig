@@ -1,6 +1,6 @@
 //! ZVM core struct — the central data structure for the Zig Version Manager.
-//! Manages the base directory (~/.zvm), settings, version discovery,
-//! symlink-based version switching, and installed version enumeration.
+//! Manages XDG-compliant directories (config, data, cache), settings,
+//! version discovery, symlink-based version switching, and installed version enumeration.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -8,53 +8,73 @@ const settings_mod = @import("settings.zig");
 const platform = @import("platform.zig");
 
 pub const ZVM = struct {
-    /// Base directory for all zvm data (default: ~/.zvm).
-    base_dir: []const u8,
+    /// Config directory (default: ~/.config/zvm).
+    config_dir: []const u8,
+    /// Data directory (default: ~/.local/share/zvm).
+    data_dir: []const u8,
+    /// Cache directory (default: ~/.cache/zvm).
+    cache_dir: []const u8,
     /// Loaded settings (version map URLs, color prefs, etc.).
     settings: settings_mod.Settings,
     /// GPA allocator for long-lived allocations.
     allocator: std.mem.Allocator,
-    /// Resolved home directory path (owned, freed in deinit).
-    home: []const u8,
     /// I/O context from std.process.Init — needed for subprocess and HTTP operations.
     io: std.Io,
     /// Environment map from std.process.Init — needed for HTTP proxy auto-detection.
     environ_map: *std.process.Environ.Map,
 
     /// Initialize the ZVM environment.
-    /// Resolves home directory, creates ~/.zvm and ~/.zvm/self directories,
-    /// and loads (or creates) settings from JSON.
+    /// Resolves XDG directories, creates them, and loads (or creates) settings from JSON.
     pub fn init(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.Environ.Map) !ZVM {
-        const home = try platform.getHomeDir(allocator, environ_map);
+        const xdg_config = try platform.getConfigDir(allocator, environ_map);
+        const xdg_data = try platform.getDataDir(allocator, environ_map);
+        const xdg_cache = try platform.getCacheDir(allocator, environ_map);
 
-        var base_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const base_dir = try std.fmt.bufPrint(&base_buf, "{s}/.zvm", .{home});
-        const owned_base = try allocator.dupe(u8, base_dir);
+        // Build zvm-specific paths under XDG directories
+        var config_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const config_dir = try std.fmt.bufPrint(&config_buf, "{s}/zvm", .{xdg_config});
+        const owned_config = try allocator.dupe(u8, config_dir);
+        allocator.free(xdg_config);
 
-        // Create base directories
-        std.Io.Dir.cwd().createDirPath(io, owned_base) catch {};
-        const self_path = try std.fmt.allocPrint(allocator, "{s}/self", .{owned_base});
+        var data_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const data_dir = try std.fmt.bufPrint(&data_buf, "{s}/zvm", .{xdg_data});
+        const owned_data = try allocator.dupe(u8, data_dir);
+        allocator.free(xdg_data);
+
+        var cache_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cache_dir = try std.fmt.bufPrint(&cache_buf, "{s}/zvm", .{xdg_cache});
+        const owned_cache = try allocator.dupe(u8, cache_dir);
+        allocator.free(xdg_cache);
+
+        // Create directory trees
+        std.Io.Dir.cwd().createDirPath(io, owned_config) catch {};
+        std.Io.Dir.cwd().createDirPath(io, owned_data) catch {};
+        std.Io.Dir.cwd().createDirPath(io, owned_cache) catch {};
+
+        const self_path = try std.fmt.allocPrint(allocator, "{s}/self", .{owned_data});
         std.Io.Dir.cwd().createDirPath(io, self_path) catch {};
         allocator.free(self_path);
 
-        // Load settings — settings takes ownership of the path
-        const settings_path = try std.fmt.allocPrint(allocator, "{s}/settings.json", .{owned_base});
+        // Load settings from config directory
+        const settings_path = try std.fmt.allocPrint(allocator, "{s}/settings.json", .{owned_config});
         const settings = try settings_mod.Settings.load(allocator, io, settings_path);
 
         return .{
-            .base_dir = owned_base,
+            .config_dir = owned_config,
+            .data_dir = owned_data,
+            .cache_dir = owned_cache,
             .settings = settings,
             .allocator = allocator,
-            .home = home,
             .io = io,
             .environ_map = environ_map,
         };
     }
 
-    /// Release all owned memory (home, base_dir, settings strings, settings path).
+    /// Release all owned memory (directories, settings strings, settings path).
     pub fn deinit(self: *ZVM) void {
-        self.allocator.free(self.home);
-        self.allocator.free(self.base_dir);
+        self.allocator.free(self.config_dir);
+        self.allocator.free(self.data_dir);
+        self.allocator.free(self.cache_dir);
         self.allocator.free(self.settings.version_map_url);
         self.allocator.free(self.settings.zls_vmu);
         self.allocator.free(self.settings.mirror_list_url);
@@ -63,34 +83,34 @@ pub const ZVM = struct {
         if (self.settings.path) |p| self.allocator.free(p);
     }
 
-    /// Build the path for a specific version directory (e.g., ~/.zvm/0.13.0).
+    /// Build the path for a specific version directory (e.g., ~/.local/share/zvm/0.13.0).
     pub fn versionPath(self: *ZVM, buf: []u8, version: []const u8) []const u8 {
-        return std.fmt.bufPrint(buf, "{s}/{s}", .{ self.base_dir, version }) catch buf[0..0];
+        return std.fmt.bufPrint(buf, "{s}/{s}", .{ self.data_dir, version }) catch buf[0..0];
     }
 
-    /// Build the bin symlink path (e.g., ~/.zvm/bin).
+    /// Build the bin symlink path (e.g., ~/.local/share/zvm/bin).
     pub fn binPath(self: *ZVM, buf: []u8) []const u8 {
-        return std.fmt.bufPrint(buf, "{s}/bin", .{self.base_dir}) catch buf[0..0];
+        return std.fmt.bufPrint(buf, "{s}/bin", .{self.data_dir}) catch buf[0..0];
     }
 
-    /// Build the path for the cached Zig version map (e.g., ~/.zvm/versions.json).
+    /// Build the path for the cached Zig version map (e.g., ~/.cache/zvm/versions.json).
     pub fn versionsCachePath(self: *ZVM, buf: []u8) []const u8 {
-        return std.fmt.bufPrint(buf, "{s}/versions.json", .{self.base_dir}) catch buf[0..0];
+        return std.fmt.bufPrint(buf, "{s}/versions.json", .{self.cache_dir}) catch buf[0..0];
     }
 
-    /// Build the path for the cached ZLS version map (e.g., ~/.zvm/versions-zls.json).
+    /// Build the path for the cached ZLS version map (e.g., ~/.cache/zvm/versions-zls.json).
     pub fn zlsVersionsCachePath(self: *ZVM, buf: []u8) []const u8 {
-        return std.fmt.bufPrint(buf, "{s}/versions-zls.json", .{self.base_dir}) catch buf[0..0];
+        return std.fmt.bufPrint(buf, "{s}/versions-zls.json", .{self.cache_dir}) catch buf[0..0];
     }
 
-    /// List all installed Zig versions by iterating the base directory.
-    /// Skips special directories: "bin", "self", and .json files.
+    /// List all installed Zig versions by iterating the data directory.
+    /// Skips special directories: "bin", "self".
     /// Caller owns the returned list and must free each item.
     pub fn getInstalledVersions(self: *ZVM, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
         var versions: std.ArrayList([]const u8) = .empty;
         errdefer versions.deinit(allocator);
 
-        var dir = try std.Io.Dir.cwd().openDir(self.io, self.base_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.cwd().openDir(self.io, self.data_dir, .{ .iterate = true });
         defer dir.close(self.io);
 
         var iter = dir.iterate();
@@ -100,8 +120,6 @@ pub const ZVM = struct {
             if (std.mem.eql(u8, entry.name, "bin") or
                 std.mem.eql(u8, entry.name, "self"))
                 continue;
-            // Skip settings/cache files if somehow dirs
-            if (std.mem.endsWith(u8, entry.name, ".json")) continue;
 
             const name = try allocator.dupe(u8, entry.name);
             try versions.append(allocator, name);
@@ -118,7 +136,7 @@ pub const ZVM = struct {
         return true;
     }
 
-    /// Set the active Zig version by creating/updating the ~/.zvm/bin symlink
+    /// Set the active Zig version by creating/updating the bin symlink
     /// and writing the version name to a .active marker file.
     /// The symlink/junction points to the absolute path of the version directory.
     pub fn setBin(self: *ZVM, version: []const u8) !void {
@@ -128,14 +146,14 @@ pub const ZVM = struct {
         var link_buf: [std.fs.max_path_bytes]u8 = undefined;
         const link_path = self.binPath(&link_buf);
 
-        // base_dir is always absolute (resolved from HOME), so target is already absolute.
+        // data_dir is always absolute (resolved from XDG/HOME), so target is already absolute.
         // Remove existing symlink, then create new one pointing to the version directory.
         platform.removeSymlink(self.io, link_path);
         try platform.createSymlink(target, link_path, self.io);
 
         // Write active version marker file (used by getActiveVersion, works on all platforms)
         var active_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.base_dir}) catch return;
+        const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.data_dir}) catch return;
         const file = std.Io.Dir.cwd().createFile(self.io, active_path, .{}) catch return;
         defer file.close(self.io);
         var w_buf: [256]u8 = undefined;
@@ -149,7 +167,7 @@ pub const ZVM = struct {
     /// Caller owns the returned memory.
     pub fn getActiveVersion(self: *ZVM, allocator: std.mem.Allocator) ?[]const u8 {
         var active_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.base_dir}) catch return null;
+        const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.data_dir}) catch return null;
 
         const file = std.Io.Dir.cwd().openFile(self.io, active_path, .{}) catch return null;
         defer file.close(self.io);

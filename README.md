@@ -63,7 +63,7 @@ zig build -Doptimize=ReleaseSafe
 Add zvm's bin directory to your PATH:
 
 ```bash
-export PATH="$HOME/.zvm/bin:$PATH"
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/zvm/bin:$PATH"
 ```
 
 ## Quick Start
@@ -217,28 +217,36 @@ eval "$(zvm completion bash)"
 
 ## How It Works
 
+zvm follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/):
+
 ```
-~/.zvm/
-├── bin            → symlink/junction to the active version directory
-├── .active        → marker file tracking the active version name
-├── 0.16.0/        → Zig 0.16.0 installation
-│   └── zig        → Zig compiler binary
-├── 0.14.0/        → Zig 0.14.0 installation
+~/.config/zvm/                  ($XDG_CONFIG_HOME/zvm/)
+└── settings.json               Configuration file
+
+~/.local/share/zvm/             ($XDG_DATA_HOME/zvm/)
+├── bin                         → symlink/junction to the active version directory
+├── .active                     → marker file tracking the active version name
+├── 0.16.0/                     → Zig 0.16.0 installation
+│   └── zig                     → Zig compiler binary
+├── 0.14.0/                     → Zig 0.14.0 installation
 │   └── zig
-├── master/        → Latest nightly build
+├── master/                     → Latest nightly build
 │   └── zig
-├── self/          → zvm's own data
-└── settings.json  → Configuration file
+└── self/                       → zvm's own data (upgrade staging)
+
+~/.cache/zvm/                   ($XDG_CACHE_HOME/zvm/)
+├── versions.json               → cached Zig version map
+└── versions-zls.json           → cached ZLS version map
 ```
 
-- **Version switching** uses symbolic links (junctions on Windows) — `~/.zvm/bin` points to the active version's directory
+- **Version switching** uses symbolic links (junctions on Windows) — the `bin` directory points to the active version's directory
 - **Downloads** are streamed to disk with SHA256 verification and latency-based mirror selection
-- **Settings** are persisted immediately on every change to `~/.zvm/settings.json`
+- **Settings** are persisted immediately on every change to `settings.json`
 - **No background services** — zvm runs only when you invoke it
 
 ## Configuration
 
-Settings are stored in `~/.zvm/settings.json`:
+Settings are stored in `$XDG_CONFIG_HOME/zvm/settings.json` (default: `~/.config/zvm/settings.json`):
 
 ```json
 {
@@ -253,10 +261,31 @@ Settings are stored in `~/.zvm/settings.json`:
 }
 ```
 
-Override the default `~/.zvm` location with the `ZVM_PATH` environment variable:
+### Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ZVM_PATH` | Override the data directory (legacy, takes precedence over `XDG_DATA_HOME`) |
+| `XDG_CONFIG_HOME` | Config directory (default: `~/.config`) |
+| `XDG_DATA_HOME` | Data directory (default: `~/.local/share`) |
+| `XDG_CACHE_HOME` | Cache directory (default: `~/.cache`) |
+
+### Migrating from `~/.zvm`
+
+If you previously used zvm with the `~/.zvm` directory, migrate with:
 
 ```bash
-export ZVM_PATH="/custom/path"
+mkdir -p ~/.config/zvm ~/.local/share/zvm ~/.cache/zvm
+mv ~/.zvm/settings.json ~/.config/zvm/
+mv ~/.zvm/versions*.json ~/.cache/zvm/
+mv ~/.zvm/[0-9]* ~/.zvm/master ~/.zvm/bin ~/.zvm/.active ~/.local/share/zvm/
+rm -rf ~/.zvm
+```
+
+Then update your shell config to use the new PATH:
+
+```bash
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/zvm/bin:$PATH"
 ```
 
 ## CI / Releases
@@ -291,7 +320,7 @@ All available at `https://github.com/lispking/zvm/releases/latest/download/<file
 src/
 ├── main.zig          Entry point: allocator setup, CLI dispatch
 ├── cli.zig           Hand-written CLI parser with aliases and flags
-├── zvm.zig           Core ZVM struct (base dir, settings, versions)
+├── zvm.zig           Core ZVM struct (XDG dirs, settings, versions)
 ├── settings.zig      Settings persistence (JSON load/save)
 ├── errors.zig        Domain error definitions
 ├── platform.zig      OS/arch detection, symlink management

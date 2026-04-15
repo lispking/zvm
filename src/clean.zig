@@ -1,10 +1,10 @@
-//! Clean command — remove build artifacts from the zvm directory.
-//! Deletes downloaded .zip, .xz, .tar, and .tar.xz files from ~/.zvm/.
+//! Clean command — remove build artifacts from the cache directory.
+//! Deletes downloaded .zip, .xz, .tar, and .tar.xz files from the XDG cache dir.
 
 const std = @import("std");
 const zvm_mod = @import("zvm.zig");
 
-/// Remove archive files (.zip, .xz, .tar, .tar.xz) from the zvm base directory.
+/// Remove archive files (.zip, .xz, .tar, .tar.xz) from the cache directory.
 /// These are leftover files from downloads that are no longer needed after extraction.
 pub fn run(
     zvm: *zvm_mod.ZVM,
@@ -17,7 +17,7 @@ pub fn run(
 
     const extensions = [_][]const u8{ ".zip", ".xz", ".tar", ".tar.xz" };
 
-    var dir = try std.Io.Dir.cwd().openDir(zvm.io, zvm.base_dir, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(zvm.io, zvm.cache_dir, .{ .iterate = true });
     defer dir.close(zvm.io);
 
     var count: usize = 0;
