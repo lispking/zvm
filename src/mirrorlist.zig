@@ -19,10 +19,10 @@ pub fn run(
 
     if (url) |u| {
         if (std.mem.eql(u8, u, "default")) {
-            zvm.settings.resetMirrorList(allocator) catch {};
+            zvm.settings.resetMirrorList(allocator, zvm.io) catch {};
             try stdout.print("Reset mirror list to default.\n", .{});
         } else {
-            try zvm.settings.setMirrorListUrl(allocator, u);
+            try zvm.settings.setMirrorListUrl(allocator, zvm.io, u);
             try stdout.print("Set mirror list to {s}\n", .{u});
         }
     } else {

@@ -44,23 +44,23 @@ fn stripVPrefix(version: []const u8) []const u8 {
 
 /// Search for the extracted binary inside self_dir, including subdirectories.
 /// The archive may extract into a versioned directory like zvm-v0.1.1-aarch64-macos/.
-fn findBinary(allocator: std.mem.Allocator, self_dir: []const u8, exe_name: []const u8, buf: []u8) ![]const u8 {
+fn findBinary(allocator: std.mem.Allocator, io: std.Io, self_dir: []const u8, exe_name: []const u8, buf: []u8) ![]const u8 {
     _ = allocator;
     // Direct path: self_dir/zvm
     const direct = try std.fmt.bufPrint(buf, "{s}/{s}", .{ self_dir, exe_name });
-    if (std.fs.cwd().access(direct, .{})) {
+    if (std.Io.Dir.cwd().access(io, direct, .{})) {
         return direct;
     } else |_| {}
 
     // Search subdirectories: self_dir/*/zvm
-    var dir = std.fs.cwd().openDir(self_dir, .{ .iterate = true }) catch return error.FileNotFound;
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(io, self_dir, .{ .iterate = true }) catch return error.FileNotFound;
+    defer dir.close(io);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .directory) continue;
         const candidate = try std.fmt.bufPrint(buf, "{s}/{s}/{s}", .{ self_dir, entry.name, exe_name });
-        if (std.fs.cwd().access(candidate, .{})) {
+        if (std.Io.Dir.cwd().access(io, candidate, .{})) {
             return candidate;
         } else |_| {}
     }
@@ -82,7 +82,7 @@ pub fn run(
 
     // Fetch latest release info from GitHub API
     const proxy = zvm.settings.proxy;
-    const release_json = http_client.downloadToMemoryWithProxy(allocator, "https://api.github.com/repos/lispking/zvm/releases/latest", proxy) catch {
+    const release_json = http_client.downloadToMemoryWithProxy(allocator, zvm.io, zvm.environ_map, "https://api.github.com/repos/lispking/zvm/releases/latest", proxy) catch {
         try terminal.printError(stderr, "Failed to check for updates");
         return;
     };
@@ -203,7 +203,7 @@ pub fn run(
     // Download the release archive
     var buf1: [std.fs.max_path_bytes * 2]u8 = undefined;
     const self_dir = try std.fmt.bufPrint(&buf1, "{s}/self", .{zvm.base_dir});
-    std.fs.cwd().makePath(self_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(zvm.io, self_dir) catch {};
 
     var buf2: [std.fs.max_path_bytes * 2]u8 = undefined;
     const archive_path = try std.fmt.bufPrint(&buf2, "{s}/zvm-update.tar.gz", .{self_dir});
@@ -211,9 +211,9 @@ pub fn run(
     try stdout.print("Downloading {s}...\n", .{latest_version});
     try stdout.flush();
 
-    http_client.downloadToFileWithProxy(allocator, url, archive_path, proxy) catch {
+    http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, url, archive_path, proxy) catch {
         try terminal.printError(stderr, "Failed to download update");
-        std.fs.cwd().deleteFile(archive_path) catch {};
+        std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
         return;
     };
 
@@ -221,8 +221,7 @@ pub fn run(
     try stdout.print("Installing update...\n", .{});
     try stdout.flush();
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, zvm.io, .{
         .argv = &.{ "tar", "-xf", archive_path, "-C", self_dir },
     }) catch {
         try terminal.printError(stderr, "Failed to extract update");
@@ -241,15 +240,17 @@ pub fn run(
 
     // Resolve the current zvm install directory
     const install_dir = blk: {
-        if (std.process.getEnvVarOwned(allocator, "ZVM_INSTALL")) |env_dir| {
+        if (zvm.environ_map.get("ZVM_INSTALL")) |env_dir_raw| {
+            const env_dir = try allocator.dupe(u8, env_dir_raw);
             break :blk env_dir;
-        } else |_| {
+        } else {
             var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-            const exe_path = std.fs.selfExePath(&exe_buf) catch {
+            const exe_path_len = std.process.executablePath(zvm.io, &exe_buf) catch {
                 try terminal.printError(stderr, "Could not determine running binary path");
                 return;
             };
-            if (std.fs.path.dirname(exe_path)) |dir_path| {
+            const exe_path = exe_buf[0..exe_path_len];
+            if (std.Io.Dir.path.dirname(exe_path)) |dir_path| {
                 break :blk allocator.dupe(u8, dir_path) catch {
                     try terminal.printError(stderr, "Out of memory");
                     return;
@@ -263,7 +264,7 @@ pub fn run(
 
     // Find the extracted zvm binary (may be nested in a versioned subdirectory)
     var src_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-    const src_path = findBinary(allocator, self_dir, exe_name, &src_buf) catch {
+    const src_path = findBinary(allocator, zvm.io, self_dir, exe_name, &src_buf) catch {
         try terminal.printError(stderr, "Could not find extracted zvm binary");
         return;
     };
@@ -275,27 +276,26 @@ pub fn run(
     // to a running executable. Rename is allowed; then write to the original path.
     var old_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const old_path = try std.fmt.bufPrint(&old_buf, "{s}/{s}.old", .{ install_dir, exe_name });
-    _ = std.process.Child.run(.{
-        .allocator = allocator,
+    _ = std.process.run(allocator, zvm.io, .{
         .argv = &.{ "mv", dst_path, old_path },
     }) catch {};
 
     // Stream-copy the new binary
-    const src_file = std.fs.cwd().openFile(src_path, .{}) catch {
+    const src_file = std.Io.Dir.cwd().openFile(zvm.io, src_path, .{}) catch {
         try terminal.printError(stderr, "Failed to read extracted binary");
         return;
     };
-    defer src_file.close();
-    const dst_file = std.fs.cwd().createFile(dst_path, .{}) catch {
+    defer src_file.close(zvm.io);
+    const dst_file = std.Io.Dir.cwd().createFile(zvm.io, dst_path, .{}) catch {
         try terminal.printError(stderr, "Failed to write to install directory");
         return;
     };
-    defer dst_file.close();
+    defer dst_file.close(zvm.io);
 
     var src_reader_buf: [8192]u8 = undefined;
-    var src_reader = src_file.reader(&src_reader_buf);
+    var src_reader = src_file.reader(zvm.io, &src_reader_buf);
     var dst_writer_buf: [8192]u8 = undefined;
-    var dst_writer = dst_file.writer(&dst_writer_buf);
+    var dst_writer = dst_file.writer(zvm.io, &dst_writer_buf);
 
     _ = src_reader.interface.streamRemaining(&dst_writer.interface) catch {
         try terminal.printError(stderr, "Failed to copy binary");
@@ -305,19 +305,18 @@ pub fn run(
 
     // Make the new binary executable
     if (builtin.os.tag != .windows) {
-        _ = std.process.Child.run(.{
-            .allocator = allocator,
+        _ = std.process.run(allocator, zvm.io, .{
             .argv = &.{ "chmod", "+x", dst_path },
         }) catch {};
     }
 
     // Clean up old binary
-    std.fs.cwd().deleteFile(old_path) catch {};
+    std.Io.Dir.cwd().deleteFile(zvm.io, old_path) catch {};
 
     try terminal.printSuccess(stdout, "Updated zvm to latest version!");
     try stdout.print("Now running zvm {s}\n", .{latest_version});
     try stdout.flush();
 
     // Clean up the downloaded archive
-    std.fs.cwd().deleteFile(archive_path) catch {};
+    std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
 }

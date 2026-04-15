@@ -20,10 +20,10 @@ pub fn run(
 
     if (url) |u| {
         if (std.mem.eql(u8, u, "default")) {
-            try zvm.settings.setProxy(allocator, "");
+            try zvm.settings.setProxy(allocator, zvm.io, "");
             try stdout.print("Reset proxy to auto-detect (from environment).\n", .{});
         } else {
-            try zvm.settings.setProxy(allocator, u);
+            try zvm.settings.setProxy(allocator, zvm.io, u);
             try stdout.print("Set proxy to {s}\n", .{u});
         }
     } else {

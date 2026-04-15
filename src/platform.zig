@@ -64,31 +64,30 @@ pub fn getArchiveExtension() []const u8 {
 /// Create a symbolic link at `link_path` pointing to `target`.
 /// Removes any existing file/link at `link_path` before creation.
 /// On Windows, creates a directory junction (no admin privileges required).
-pub fn createSymlink(target: []const u8, link_path: []const u8) !void {
+pub fn createSymlink(target: []const u8, link_path: []const u8, io: std.Io) !void {
     // Remove existing link/dir first
-    std.fs.cwd().deleteFile(link_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
 
     if (builtin.os.tag == .windows) {
         // On Windows, use directory junction via mklink /J.
         // Junctions work without administrator privileges and behave like
         // directory symlinks — the linked path resolves transparently.
-        std.fs.cwd().deleteDir(link_path) catch {};
-        const result = std.process.Child.run(.{
-            .allocator = std.heap.page_allocator,
+        std.Io.Dir.cwd().deleteDir(io, link_path) catch {};
+        const result = std.process.run(std.heap.page_allocator, io, .{
             .argv = &.{ "cmd", "/c", "mklink", "/J", link_path, target },
         }) catch return error.SymlinkFailed;
         defer std.heap.page_allocator.free(result.stdout);
         defer std.heap.page_allocator.free(result.stderr);
-        if (result.term != .Exited or result.term.Exited != 0)
+        if (result.term != .exited or result.term.exited != 0)
             return error.SymlinkFailed;
         return;
     }
 
-    std.posix.symlink(target, link_path) catch |err| switch (err) {
+    std.Io.Dir.symLinkAbsolute(io, target, link_path, .{}) catch |err| switch (err) {
         error.PathAlreadyExists => {
             // Try harder to remove
-            std.fs.cwd().deleteTree(link_path) catch {};
-            try std.posix.symlink(target, link_path);
+            std.Io.Dir.cwd().deleteTree(io, link_path) catch {};
+            try std.Io.Dir.symLinkAbsolute(io, target, link_path, .{});
         },
         else => return err,
     };
@@ -96,30 +95,33 @@ pub fn createSymlink(target: []const u8, link_path: []const u8) !void {
 
 /// Remove a symbolic link at the given path (best-effort, ignores errors).
 /// On Windows, junctions are removed as directories.
-pub fn removeSymlink(path: []const u8) void {
+pub fn removeSymlink(io: std.Io, path: []const u8) void {
     if (builtin.os.tag == .windows) {
-        std.fs.cwd().deleteDir(path) catch {};
+        std.Io.Dir.cwd().deleteDir(io, path) catch {};
         return;
     }
-    std.fs.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
 /// Resolve the user's home directory.
 /// Checks ZVM_PATH env var first, then falls back to HOME (or USERPROFILE on Windows).
 /// Caller owns the returned memory.
-pub fn getHomeDir(allocator: std.mem.Allocator) ![]const u8 {
+pub fn getHomeDir(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]const u8 {
     // Try ZVM_PATH first, then HOME
-    if (std.process.getEnvVarOwned(allocator, "ZVM_PATH")) |path| {
-        return path;
-    } else |_| {}
-
-    if (builtin.os.tag == .windows) {
-        if (std.process.getEnvVarOwned(allocator, "USERPROFILE")) |path| {
-            return path;
-        } else |_| {}
+    if (environ_map.get("ZVM_PATH")) |path| {
+        return allocator.dupe(u8, path);
     }
 
-    return std.process.getEnvVarOwned(allocator, "HOME");
+    if (builtin.os.tag == .windows) {
+        if (environ_map.get("USERPROFILE")) |path| {
+            return allocator.dupe(u8, path);
+        }
+    }
+
+    if (environ_map.get("HOME")) |path| {
+        return allocator.dupe(u8, path);
+    }
+    return error.FileNotFound;
 }
 
 /// Build the target-specific platform string used in Zig download URLs.

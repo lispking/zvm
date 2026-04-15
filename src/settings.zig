@@ -53,20 +53,22 @@ pub const Settings = struct {
 
     /// Load settings from a JSON file, or create with defaults if not found.
     /// Takes ownership of the `path` parameter.
-    pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Settings {
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 // Create new settings file with defaults
                 var settings = default;
                 settings.path = path;
-                try settings.save(allocator);
+                try settings.save(allocator, io);
                 return settings;
             },
             else => return err,
         };
-        defer file.close();
+        defer file.close(io);
 
-        const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+        var read_buf: [1024 * 1024]u8 = undefined;
+        var reader = file.reader(io, &read_buf);
+        const content = try reader.interface.allocRemaining(allocator, .limited(1024 * 1024));
         defer allocator.free(content);
 
         const parsed = std.json.parseFromSlice(
@@ -101,8 +103,7 @@ pub const Settings = struct {
     }
 
     /// Persist current settings to the JSON file.
-    /// Uses pretty-printed JSON with 4-space indentation.
-    pub fn save(self: Settings, allocator: std.mem.Allocator) !void {
+    pub fn save(self: Settings, allocator: std.mem.Allocator, io: std.Io) !void {
         _ = allocator;
         const path = self.path orelse return;
 
@@ -118,15 +119,15 @@ pub const Settings = struct {
         };
 
         // Ensure parent directory exists
-        if (std.fs.path.dirname(path)) |dir_path| {
-            std.fs.cwd().makePath(dir_path) catch {};
+        if (std.Io.Dir.path.dirname(path)) |dir_path| {
+            std.Io.Dir.cwd().createDirPath(io, dir_path) catch {};
         }
 
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+        defer file.close(io);
 
         var buf: [4096]u8 = undefined;
-        var writer = file.writer(&buf);
+        var writer = file.writer(io, &buf);
         try std.json.Stringify.value(jsonable, .{
             .whitespace = .indent_4,
         }, &writer.interface);
@@ -148,82 +149,82 @@ pub const Settings = struct {
     }
 
     /// Set the Zig version map URL and persist immediately.
-    pub fn setVersionMapUrl(self: *Settings, allocator: std.mem.Allocator, url: []const u8) !void {
+    pub fn setVersionMapUrl(self: *Settings, allocator: std.mem.Allocator, io: std.Io, url: []const u8) !void {
         const old = self.version_map_url;
         self.version_map_url = try allocator.dupe(u8, url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Set the ZLS version map URL and persist immediately.
-    pub fn setZlsVMU(self: *Settings, allocator: std.mem.Allocator, url: []const u8) !void {
+    pub fn setZlsVMU(self: *Settings, allocator: std.mem.Allocator, io: std.Io, url: []const u8) !void {
         const old = self.zls_vmu;
         self.zls_vmu = try allocator.dupe(u8, url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Set the mirror list URL and persist immediately.
-    pub fn setMirrorListUrl(self: *Settings, allocator: std.mem.Allocator, url: []const u8) !void {
+    pub fn setMirrorListUrl(self: *Settings, allocator: std.mem.Allocator, io: std.Io, url: []const u8) !void {
         const old = self.mirror_list_url;
         self.mirror_list_url = try allocator.dupe(u8, url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Reset the Zig version map URL to the official default.
-    pub fn resetVersionMap(self: *Settings, allocator: std.mem.Allocator) !void {
+    pub fn resetVersionMap(self: *Settings, allocator: std.mem.Allocator, io: std.Io) !void {
         const old = self.version_map_url;
         self.version_map_url = try allocator.dupe(u8, default.version_map_url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Reset the ZLS version map URL to the official default.
-    pub fn resetZlsVMU(self: *Settings, allocator: std.mem.Allocator) !void {
+    pub fn resetZlsVMU(self: *Settings, allocator: std.mem.Allocator, io: std.Io) !void {
         const old = self.zls_vmu;
         self.zls_vmu = try allocator.dupe(u8, default.zls_vmu);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Reset the mirror list URL to the official default.
-    pub fn resetMirrorList(self: *Settings, allocator: std.mem.Allocator) !void {
+    pub fn resetMirrorList(self: *Settings, allocator: std.mem.Allocator, io: std.Io) !void {
         const old = self.mirror_list_url;
         self.mirror_list_url = try allocator.dupe(u8, default.mirror_list_url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Toggle colored output on/off and persist.
-    pub fn toggleColor(self: *Settings, allocator: std.mem.Allocator) !void {
+    pub fn toggleColor(self: *Settings, allocator: std.mem.Allocator, io: std.Io) !void {
         self.use_color = !self.use_color;
-        try self.save(allocator);
+        try self.save(allocator, io);
     }
 
     /// Set the proxy URL and persist immediately.
-    pub fn setProxy(self: *Settings, allocator: std.mem.Allocator, url: []const u8) !void {
+    pub fn setProxy(self: *Settings, allocator: std.mem.Allocator, io: std.Io, url: []const u8) !void {
         const old = self.proxy;
         self.proxy = try allocator.dupe(u8, url);
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         allocator.free(old);
     }
 
     /// Update the cached preferred mirror and persist immediately.
-    pub fn setPreferredMirror(self: *Settings, allocator: std.mem.Allocator, base_url: []const u8) void {
+    pub fn setPreferredMirror(self: *Settings, allocator: std.mem.Allocator, io: std.Io, base_url: []const u8) void {
         const old = self.preferred_mirror;
         self.preferred_mirror = allocator.dupe(u8, base_url) catch return;
-        self.mirror_updated_at = std.time.timestamp();
-        self.save(allocator) catch {};
+        self.mirror_updated_at = std.Io.Clock.Timestamp.now(io, .real).raw.toSeconds();
+        self.save(allocator, io) catch {};
         if (old.len > 0) allocator.free(old);
     }
 
     /// Clear the cached preferred mirror (e.g., when it fails).
-    pub fn clearPreferredMirror(self: *Settings, allocator: std.mem.Allocator) void {
+    pub fn clearPreferredMirror(self: *Settings, allocator: std.mem.Allocator, io: std.Io) void {
         const old = self.preferred_mirror;
         self.preferred_mirror = "";
         self.mirror_updated_at = 0;
-        self.save(allocator) catch {};
+        self.save(allocator, io) catch {};
         if (old.len > 0) allocator.free(old);
     }
 };

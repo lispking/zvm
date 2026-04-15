@@ -11,8 +11,8 @@ pub const VersionMap = std.json.ObjectMap;
 
 /// Fetch the Zig version map from the given URL.
 /// Returns a parsed JSON value tree — caller must call parsed.deinit() when done.
-pub fn fetchVersionMap(allocator: std.mem.Allocator, url: []const u8, proxy: []const u8) !std.json.Parsed(std.json.Value) {
-    const body = try http_client.downloadToMemoryWithProxy(allocator, url, proxy);
+pub fn fetchVersionMap(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.Environ.Map, url: []const u8, proxy: []const u8) !std.json.Parsed(std.json.Value) {
+    const body = try http_client.downloadToMemoryWithProxy(allocator, io, environ_map, url, proxy);
     defer allocator.free(body);
 
     return try std.json.parseFromSlice(std.json.Value, allocator, body, .{
@@ -22,11 +22,13 @@ pub fn fetchVersionMap(allocator: std.mem.Allocator, url: []const u8, proxy: []c
 
 /// Load version map from a local cache file.
 /// Returns null if the file doesn't exist or can't be read.
-pub fn loadCachedVersionMap(allocator: std.mem.Allocator, path: []const u8) !?std.json.Parsed(std.json.Value) {
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
+pub fn loadCachedVersionMap(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !?std.json.Parsed(std.json.Value) {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer file.close(io);
 
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    var read_buf: [65536]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const content = try reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024));
     defer allocator.free(content);
 
     return try std.json.parseFromSlice(std.json.Value, allocator, content, .{
@@ -35,15 +37,15 @@ pub fn loadCachedVersionMap(allocator: std.mem.Allocator, path: []const u8) !?st
 }
 
 /// Save a version map to a local cache file as JSON.
-pub fn cacheVersionMap(allocator: std.mem.Allocator, path: []const u8, value: std.json.Value) !void {
+pub fn cacheVersionMap(allocator: std.mem.Allocator, io: std.Io, path: []const u8, value: std.json.Value) !void {
     const json_str = try std.json.Stringify.valueAlloc(allocator, value, .{});
     defer allocator.free(json_str);
 
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
 
     var buf: [4096]u8 = undefined;
-    var writer = file.writer(&buf);
+    var writer = file.writer(io, &buf);
     try writer.interface.writeAll(json_str);
     try writer.interface.flush();
 }

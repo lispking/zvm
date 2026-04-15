@@ -22,22 +22,22 @@ pub fn run(
     switch (target) {
         .zig => {
             if (std.mem.eql(u8, value, "default")) {
-                zvm.settings.resetVersionMap(allocator) catch {};
+                zvm.settings.resetVersionMap(allocator, zvm.io) catch {};
                 try stdout.print("Reset Zig version map to default.\n", .{});
             } else if (std.mem.eql(u8, value, "mach")) {
-                try zvm.settings.setVersionMapUrl(allocator, "https://machengine.org/zig/index.json");
+                try zvm.settings.setVersionMapUrl(allocator, zvm.io, "https://machengine.org/zig/index.json");
                 try stdout.print("Set Zig version map to Mach engine.\n", .{});
             } else {
-                try zvm.settings.setVersionMapUrl(allocator, value);
+                try zvm.settings.setVersionMapUrl(allocator, zvm.io, value);
                 try stdout.print("Set Zig version map to {s}\n", .{value});
             }
         },
         .zls => {
             if (std.mem.eql(u8, value, "default")) {
-                zvm.settings.resetZlsVMU(allocator) catch {};
+                zvm.settings.resetZlsVMU(allocator, zvm.io) catch {};
                 try stdout.print("Reset ZLS VMU to default.\n", .{});
             } else {
-                try zvm.settings.setZlsVMU(allocator, value);
+                try zvm.settings.setZlsVMU(allocator, zvm.io, value);
                 try stdout.print("Set ZLS VMU to {s}\n", .{value});
             }
         },

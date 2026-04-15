@@ -16,32 +16,38 @@ pub const ZVM = struct {
     allocator: std.mem.Allocator,
     /// Resolved home directory path (owned, freed in deinit).
     home: []const u8,
+    /// I/O context from std.process.Init — needed for subprocess and HTTP operations.
+    io: std.Io,
+    /// Environment map from std.process.Init — needed for HTTP proxy auto-detection.
+    environ_map: *std.process.Environ.Map,
 
     /// Initialize the ZVM environment.
     /// Resolves home directory, creates ~/.zvm and ~/.zvm/self directories,
     /// and loads (or creates) settings from JSON.
-    pub fn init(allocator: std.mem.Allocator) !ZVM {
-        const home = try platform.getHomeDir(allocator);
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.Environ.Map) !ZVM {
+        const home = try platform.getHomeDir(allocator, environ_map);
 
         var base_buf: [std.fs.max_path_bytes]u8 = undefined;
         const base_dir = try std.fmt.bufPrint(&base_buf, "{s}/.zvm", .{home});
         const owned_base = try allocator.dupe(u8, base_dir);
 
         // Create base directories
-        std.fs.cwd().makePath(owned_base) catch {};
+        std.Io.Dir.cwd().createDirPath(io, owned_base) catch {};
         const self_path = try std.fmt.allocPrint(allocator, "{s}/self", .{owned_base});
-        std.fs.cwd().makePath(self_path) catch {};
+        std.Io.Dir.cwd().createDirPath(io, self_path) catch {};
         allocator.free(self_path);
 
         // Load settings — settings takes ownership of the path
         const settings_path = try std.fmt.allocPrint(allocator, "{s}/settings.json", .{owned_base});
-        const settings = try settings_mod.Settings.load(allocator, settings_path);
+        const settings = try settings_mod.Settings.load(allocator, io, settings_path);
 
         return .{
             .base_dir = owned_base,
             .settings = settings,
             .allocator = allocator,
             .home = home,
+            .io = io,
+            .environ_map = environ_map,
         };
     }
 
@@ -84,11 +90,11 @@ pub const ZVM = struct {
         var versions: std.ArrayList([]const u8) = .empty;
         errdefer versions.deinit(allocator);
 
-        var dir = try std.fs.cwd().openDir(self.base_dir, .{ .iterate = true });
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(self.io, self.base_dir, .{ .iterate = true });
+        defer dir.close(self.io);
 
         var iter = dir.iterate();
-        while (try iter.next()) |entry| {
+        while (try iter.next(self.io)) |entry| {
             if (entry.kind != .directory) continue;
             // Skip special directories
             if (std.mem.eql(u8, entry.name, "bin") or
@@ -108,7 +114,7 @@ pub const ZVM = struct {
     pub fn isVersionInstalled(self: *ZVM, version: []const u8) bool {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const path = self.versionPath(&buf, version);
-        std.fs.cwd().access(path, .{}) catch return false;
+        std.Io.Dir.cwd().access(self.io, path, .{}) catch return false;
         return true;
     }
 
@@ -124,16 +130,16 @@ pub const ZVM = struct {
 
         // base_dir is always absolute (resolved from HOME), so target is already absolute.
         // Remove existing symlink, then create new one pointing to the version directory.
-        platform.removeSymlink(link_path);
-        try platform.createSymlink(target, link_path);
+        platform.removeSymlink(self.io, link_path);
+        try platform.createSymlink(target, link_path, self.io);
 
         // Write active version marker file (used by getActiveVersion, works on all platforms)
         var active_buf: [std.fs.max_path_bytes]u8 = undefined;
         const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.base_dir}) catch return;
-        const file = std.fs.cwd().createFile(active_path, .{}) catch return;
-        defer file.close();
+        const file = std.Io.Dir.cwd().createFile(self.io, active_path, .{}) catch return;
+        defer file.close(self.io);
         var w_buf: [256]u8 = undefined;
-        var writer = file.writer(&w_buf);
+        var writer = file.writer(self.io, &w_buf);
         writer.interface.writeAll(version) catch {};
         writer.interface.flush() catch {};
     }
@@ -145,10 +151,12 @@ pub const ZVM = struct {
         var active_buf: [std.fs.max_path_bytes]u8 = undefined;
         const active_path = std.fmt.bufPrint(&active_buf, "{s}/.active", .{self.base_dir}) catch return null;
 
-        const file = std.fs.cwd().openFile(active_path, .{}) catch return null;
-        defer file.close();
+        const file = std.Io.Dir.cwd().openFile(self.io, active_path, .{}) catch return null;
+        defer file.close(self.io);
 
-        const content = file.readToEndAlloc(allocator, 256) catch return null;
+        var read_buf: [256]u8 = undefined;
+        var reader = file.reader(self.io, &read_buf);
+        const content = reader.interface.allocRemaining(allocator, .limited(256)) catch return null;
         defer allocator.free(content);
 
         const trimmed = std.mem.trim(u8, content, " \n\r");

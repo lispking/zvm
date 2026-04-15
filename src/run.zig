@@ -20,7 +20,7 @@ pub fn run(
 
     if (!zvm.isVersionInstalled(version)) {
         var buf: [4096]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&buf);
+        var stderr_writer = std.Io.File.stderr().writer(zvm.io, &buf);
         try stderr_writer.interface.print("Zig {s} is not installed. Run 'zvm install {s}' first.\n", .{ version, version });
         try stderr_writer.interface.flush();
         std.process.exit(1);
@@ -40,20 +40,25 @@ pub fn run(
         try argv.append(allocator, arg);
     }
 
-    // Spawn child process with inherited stdio
-    var child = std.process.Child.init(argv.items, allocator);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    try child.spawn();
-    const term = try child.wait();
+    // Spawn child process with inherited stdio (default behavior)
+    var child = std.process.spawn(zvm.io, .{
+        .argv = argv.items,
+    }) catch {
+        var buf: [4096]u8 = undefined;
+        var stderr_writer = std.Io.File.stderr().writer(zvm.io, &buf);
+        try stderr_writer.interface.print("Failed to spawn zig {s}\n", .{version});
+        try stderr_writer.interface.flush();
+        std.process.exit(1);
+    };
+    const term = child.wait(zvm.io) catch {
+        std.process.exit(1);
+    };
 
     // Propagate exit code
     switch (term) {
-        .Exited => |code| std.process.exit(code),
-        .Signal => |sig| {
-            std.debug.print("Process killed by signal {d}\n", .{sig});
+        .exited => |code| std.process.exit(code),
+        .signal => {
+            std.debug.print("Process killed by signal\n", .{});
             std.process.exit(1);
         },
         else => std.process.exit(1),

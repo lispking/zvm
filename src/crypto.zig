@@ -20,11 +20,13 @@ fn hexEncode(digest: *const [Sha256.digest_length]u8, buf: *[hex_len]u8) []const
 /// Compute SHA256 hash of a file and return as hex-encoded string.
 /// Reads the entire file into memory (up to 500MB).
 /// Caller owns returned memory.
-pub fn computeFileSha256(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+pub fn computeFileSha256(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const content = try file.readToEndAlloc(allocator, 500 * 1024 * 1024);
+    var read_buf: [16384]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const content = try reader.interface.allocRemaining(allocator, .limited(500 * 1024 * 1024));
     defer allocator.free(content);
 
     var hasher = Sha256.init(.{});
@@ -40,11 +42,13 @@ pub fn computeFileSha256(allocator: std.mem.Allocator, path: []const u8) ![]cons
 
 /// Verify that a file's SHA256 hash matches the expected hex-encoded checksum.
 /// Returns true if they match, false otherwise.
-pub fn verifyFileSha256(path: []const u8, expected_hex: []const u8) !bool {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+pub fn verifyFileSha256(io: std.Io, path: []const u8, expected_hex: []const u8) !bool {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const content = try file.readToEndAlloc(std.heap.page_allocator, 500 * 1024 * 1024);
+    var read_buf: [16384]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const content = try reader.interface.allocRemaining(std.heap.page_allocator, .limited(500 * 1024 * 1024));
     defer std.heap.page_allocator.free(content);
 
     var hasher = Sha256.init(.{});

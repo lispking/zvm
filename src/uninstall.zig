@@ -17,7 +17,7 @@ pub fn run(
     const path = zvm.versionPath(&buf, version);
 
     // Verify the version is installed
-    std.fs.cwd().access(path, .{}) catch {
+    std.Io.Dir.cwd().access(zvm.io, path, .{}) catch {
         try stderr.print("Zig {s} is not installed.\n", .{version});
         try stderr.flush();
         return;
@@ -33,7 +33,7 @@ pub fn run(
     }
 
     // Delete the version directory tree
-    std.fs.cwd().deleteTree(path) catch |err| {
+    std.Io.Dir.cwd().deleteTree(zvm.io, path) catch |err| {
         try stderr.print("Failed to remove {s}: {}\n", .{ version, err });
         try stderr.flush();
         return;

@@ -17,16 +17,16 @@ pub fn run(
 
     const extensions = [_][]const u8{ ".zip", ".xz", ".tar", ".tar.xz" };
 
-    var dir = try std.fs.cwd().openDir(zvm.base_dir, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(zvm.io, zvm.base_dir, .{ .iterate = true });
+    defer dir.close(zvm.io);
 
     var count: usize = 0;
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(zvm.io)) |entry| {
         if (entry.kind != .file) continue;
         for (extensions) |ext| {
             if (std.mem.endsWith(u8, entry.name, ext)) {
-                dir.deleteFile(entry.name) catch continue;
+                dir.deleteFile(zvm.io, entry.name) catch continue;
                 count += 1;
                 break;
             }

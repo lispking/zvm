@@ -70,13 +70,13 @@ export PATH="$HOME/.zvm/bin:$PATH"
 
 ```bash
 # Install a Zig version
-zvm install 0.15.2
+zvm install 0.16.0
 
 # Install latest nightly build
 zvm install master
 
 # Install with ZLS (Zig Language Server)
-zvm install --zls 0.15.2
+zvm install --zls 0.16.0
 
 # Switch to a different version
 zvm use 0.14.0
@@ -221,7 +221,7 @@ eval "$(zvm completion bash)"
 ~/.zvm/
 ├── bin            → symlink/junction to the active version directory
 ├── .active        → marker file tracking the active version name
-├── 0.15.2/        → Zig 0.15.2 installation
+├── 0.16.0/        → Zig 0.16.0 installation
 │   └── zig        → Zig compiler binary
 ├── 0.14.0/        → Zig 0.14.0 installation
 │   └── zig

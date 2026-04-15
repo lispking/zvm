@@ -121,8 +121,8 @@ const command_aliases = std.StaticStringMap(Command).initComptime(.{
     .{ "-v", .version },
 });
 
-pub fn parse(allocator: std.mem.Allocator) !struct { global: GlobalFlags, cmd: ParsedCommand } {
-    var args = try std.process.argsWithAllocator(allocator);
+pub fn parse(allocator: std.mem.Allocator, args_data: std.process.Args) !struct { global: GlobalFlags, cmd: ParsedCommand } {
+    var args = std.process.Args.Iterator.initAllocator(args_data, allocator) catch return error.OutOfMemory;
     defer args.deinit();
 
     // Skip program name

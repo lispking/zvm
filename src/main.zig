@@ -1,5 +1,5 @@
 //! zvm - Zig Version Manager
-//! A fast, dependency-free version manager for Zig written in Zig 0.15.x.
+//! A fast, dependency-free version manager for Zig written in Zig 0.16.x.
 //! Manages multiple Zig compiler installations, switches between versions,
 //! and provides shell completion support.
 
@@ -20,36 +20,28 @@ fn fullVersion() []const u8 {
 }
 
 /// Application entry point.
-/// Sets up memory allocators, parses CLI arguments, initializes the ZVM environment,
-/// and dispatches the requested command.
-pub fn main() !void {
-    // Use DebugAllocator (formerly GPA) for leak detection in debug builds
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer {
-        const check = gpa.deinit();
-        if (check == .leak) {
-            std.debug.print("Memory leak detected!\n", .{});
-        }
-    }
-    const allocator = gpa.allocator();
+/// Receives std.process.Init from the Zig runtime which provides
+/// pre-initialized allocator, I/O context, and environment map.
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
     // Arena allocator for CLI parsing — all parse-time allocations are freed at once
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     // Parse CLI arguments
-    const parsed = cli.parse(arena.allocator()) catch {
+    const parsed = cli.parse(arena.allocator(), init.minimal.args) catch {
         var stderr_buf: [4096]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+        var stderr_writer = std.Io.File.stderr().writer(init.io, &stderr_buf);
         try terminal.printError(&stderr_writer.interface, "Failed to parse arguments");
         try cli.printHelp(&stderr_writer.interface);
         std.process.exit(1);
     };
 
     // Initialize ZVM environment (~/.zvm, settings, etc.)
-    var zvm = zvm_mod.ZVM.init(allocator) catch {
+    var zvm = zvm_mod.ZVM.init(allocator, init.io, init.environ_map) catch {
         var stderr_buf: [4096]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+        var stderr_writer = std.Io.File.stderr().writer(init.io, &stderr_buf);
         try terminal.printError(&stderr_writer.interface, "Failed to initialize ZVM");
         std.process.exit(1);
     };
@@ -62,11 +54,11 @@ pub fn main() !void {
 
     // Setup buffered stdout/stderr writers
     var stdout_buf: [8192]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     var stderr_buf: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    var stderr_writer = std.Io.File.stderr().writer(init.io, &stderr_buf);
     const stderr = &stderr_writer.interface;
 
     // Dispatch to the appropriate command handler

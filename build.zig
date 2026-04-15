@@ -12,12 +12,11 @@ pub fn build(b: *std.Build) void {
         "version",
         "Semantic version (e.g. 0.2.0). In CI, pass the git tag. Locally defaults to git describe or \"0.0.1\".",
     ) orelse blk: {
-        const tag = std.process.Child.run(.{
-            .allocator = b.allocator,
+        const tag = std.process.run(b.allocator, b.graph.io, .{
             .argv = &.{ "git", "describe", "--tags", "--abbrev=0" },
         }) catch break :blk "0.0.1";
         switch (tag.term) {
-            .Exited => |code| if (code != 0) break :blk "0.0.1",
+            .exited => |code| if (code != 0) break :blk "0.0.1",
             else => break :blk "0.0.1",
         }
         const trimmed = std.mem.trim(u8, tag.stdout, " \n\r");
@@ -26,8 +25,7 @@ pub fn build(b: *std.Build) void {
     };
 
     const git_commit = blk: {
-        const result = std.process.Child.run(.{
-            .allocator = b.allocator,
+        const result = std.process.run(b.allocator, b.graph.io, .{
             .argv = &.{ "git", "rev-parse", "--short", "HEAD" },
         }) catch break :blk "unknown";
         break :blk std.mem.trim(u8, result.stdout, " \n\r");
