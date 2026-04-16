@@ -4,14 +4,14 @@
 //! Optionally installs ZLS (Zig Language Server) alongside Zig.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
-const cli = @import("cli.zig");
-const platform = @import("platform.zig");
-const terminal = @import("terminal.zig");
-const version_map = @import("version_map.zig");
-const http_client = @import("http_client.zig");
+const zvm_mod = @import("../core/zvm.zig");
+const cli = @import("../cli.zig");
+const platform = @import("../core/platform.zig");
+const terminal = @import("../core/terminal.zig");
+const version_map = @import("../network/version_map.zig");
+const http_client = @import("../network/http_client.zig");
 const archive = @import("archive.zig");
-const crypto = @import("crypto.zig");
+const crypto = @import("../core/crypto.zig");
 
 /// Main entry point for the `zvm install` command.
 /// Resolves the requested version, checks if already installed,

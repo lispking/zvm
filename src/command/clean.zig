@@ -2,7 +2,7 @@
 //! Deletes downloaded .zip, .xz, .tar, and .tar.xz files from the XDG cache dir.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
+const zvm_mod = @import("../core/zvm.zig");
 
 /// Remove archive files (.zip, .xz, .tar, .tar.xz) from the cache directory.
 /// These are leftover files from downloads that are no longer needed after extraction.

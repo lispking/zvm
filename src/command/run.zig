@@ -2,7 +2,7 @@
 //! Spawns the zig binary from the requested version directory as a child process.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
+const zvm_mod = @import("../core/zvm.zig");
 
 /// Run a Zig command using a specific installed version.
 /// All arguments after the version are passed through to the zig binary.

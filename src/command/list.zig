@@ -5,11 +5,11 @@
 //!   - --vmu: show configured version map URLs
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
-const terminal = @import("terminal.zig");
-const version_map = @import("version_map.zig");
+const zvm_mod = @import("../core/zvm.zig");
+const terminal = @import("../core/terminal.zig");
+const version_map = @import("../network/version_map.zig");
 
-pub const ListFlags = @import("cli.zig").ListFlags;
+pub const ListFlags = @import("../cli.zig").ListFlags;
 
 /// Main entry point for the `zvm list` command.
 /// Dispatches to the appropriate listing mode based on flags.

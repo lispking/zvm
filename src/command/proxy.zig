@@ -4,7 +4,7 @@
 //! from environment variables (http_proxy, https_proxy).
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
+const zvm_mod = @import("../core/zvm.zig");
 
 /// Set or display the HTTP/HTTPS proxy.
 /// "default" clears the proxy (auto-detect from env vars).

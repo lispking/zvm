@@ -3,8 +3,8 @@
 //! Blocks removal of the currently active version and suggests switching first.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
-const terminal = @import("terminal.zig");
+const zvm_mod = @import("../core/zvm.zig");
+const terminal = @import("../core/terminal.zig");
 
 /// Remove an installed Zig version.
 /// Checks if the version exists and blocks removal if it's currently active.

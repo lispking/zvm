@@ -3,7 +3,7 @@
 //! which can be faster than the official servers in some regions.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
+const zvm_mod = @import("../core/zvm.zig");
 
 /// Set or display the mirror list URL.
 /// "default" resets to the official community mirrors.

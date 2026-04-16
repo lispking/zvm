@@ -2,7 +2,7 @@
 //! Updates the bin symlink in the data directory to point to the requested version directory.
 
 const std = @import("std");
-const zvm_mod = @import("zvm.zig");
+const zvm_mod = @import("../core/zvm.zig");
 
 /// Switch to an installed Zig version by updating the bin symlink.
 /// Prints an error if the requested version is not installed.

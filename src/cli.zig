@@ -4,7 +4,7 @@
 //! and subcommands (vmu zig/zls).
 
 const std = @import("std");
-const errors = @import("errors.zig");
+const errors = @import("core/errors.zig");
 
 /// Supported shell types for completion generation.
 pub const ShellType = enum { zsh, bash };

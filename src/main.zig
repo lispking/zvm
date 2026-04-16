@@ -5,10 +5,10 @@
 
 const std = @import("std");
 const cli = @import("cli.zig");
-const zvm_mod = @import("zvm.zig");
-const terminal = @import("terminal.zig");
-const errors = @import("errors.zig");
-const platform = @import("platform.zig");
+const zvm_mod = @import("core/zvm.zig");
+const terminal = @import("core/terminal.zig");
+const errors = @import("core/errors.zig");
+const platform = @import("core/platform.zig");
 const build_options = @import("build_options");
 
 /// Current version of zvm, injected at build time from git tag or -Dversion=.
@@ -71,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
             try stdout.flush();
         },
         .install => |inst| {
-            const install = @import("install.zig");
+            const install = @import("command/install.zig");
             install.run(&zvm, allocator, inst.version, inst.flags, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -79,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .use => |use_cmd| {
-            const use_mod = @import("use.zig");
+            const use_mod = @import("command/use.zig");
             const ver = use_cmd.version orelse {
                 try terminal.printError(stderr, "No version specified. Use 'zvm use <version>'");
                 try stderr.flush();
@@ -92,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .list => |list_cmd| {
-            const list = @import("list.zig");
+            const list = @import("command/list.zig");
             list.run(&zvm, allocator, list_cmd.flags, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .uninstall => |uninst| {
-            const uninstall = @import("uninstall.zig");
+            const uninstall = @import("command/uninstall.zig");
             uninstall.run(&zvm, allocator, uninst.version, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -108,7 +108,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .clean => {
-            const clean = @import("clean.zig");
+            const clean = @import("command/clean.zig");
             clean.run(&zvm, allocator, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -116,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .run => |run_cmd| {
-            const run_mod = @import("run.zig");
+            const run_mod = @import("command/run.zig");
             run_mod.run(&zvm, allocator, run_cmd.version, run_cmd.args, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -124,7 +124,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .upgrade => {
-            const upgrade = @import("upgrade.zig");
+            const upgrade = @import("command/upgrade.zig");
             upgrade.run(&zvm, allocator, VERSION, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -132,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .vmu => |vmu_cmd| {
-            const vmu = @import("vmu.zig");
+            const vmu = @import("core/vmu.zig");
             vmu.run(&zvm, allocator, vmu_cmd.target, vmu_cmd.value, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -140,7 +140,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .mirrorlist => |ml_cmd| {
-            const mirrorlist = @import("mirrorlist.zig");
+            const mirrorlist = @import("command/mirrorlist.zig");
             mirrorlist.run(&zvm, allocator, ml_cmd.url, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();
@@ -148,7 +148,7 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .proxy => |proxy_cmd| {
-            const proxy_mod = @import("proxy.zig");
+            const proxy_mod = @import("command/proxy.zig");
             proxy_mod.run(&zvm, allocator, proxy_cmd.url, stdout, stderr) catch |err| {
                 try terminal.printError(stderr, @errorName(err));
                 try stderr.flush();

@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const settings_mod = @import("settings.zig");
+const settings_mod = @import("../core/settings.zig");
 const mirror_probe = @import("mirror_probe.zig");
 
 /// Cache TTL: 24 hours in seconds.

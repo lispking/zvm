@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const zvm_mod = @import("zvm.zig");
-const cli = @import("cli.zig");
+const cli = @import("../cli.zig");
 
 /// Set the version map source for Zig or ZLS.
 /// Special values: "default" resets to official, "mach" (Zig only) uses Mach engine builds.

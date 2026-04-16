@@ -5,9 +5,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const zvm_mod = @import("zvm.zig");
-const terminal = @import("terminal.zig");
-const http_client = @import("http_client.zig");
+const zvm_mod = @import("../core/zvm.zig");
+const terminal = @import("../core/terminal.zig");
+const http_client = @import("../network/http_client.zig");
 
 /// GitHub Release API response structure (used for reference, parsed dynamically).
 const GithubRelease = struct {
