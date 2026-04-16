@@ -317,6 +317,28 @@ pub fn run(
     try stdout.print("Now running zvm {s}\n", .{latest_version});
     try stdout.flush();
 
+    // Show the active Zig version
+    if (zvm.getActiveVersion(allocator)) |active| {
+        defer allocator.free(active);
+        var ver_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const ver_path = zvm.versionPath(&ver_buf, active);
+        const zig_path = std.fmt.allocPrint(allocator, "{s}/zig", .{ver_path}) catch return;
+        defer allocator.free(zig_path);
+
+        const ver_result = std.process.run(allocator, zvm.io, .{
+            .argv = &.{ zig_path, "version" },
+            .stdout_limit = .limited(1024),
+        }) catch return;
+        defer allocator.free(ver_result.stdout);
+        defer allocator.free(ver_result.stderr);
+
+        if (ver_result.stdout.len > 0) {
+            const ver = std.mem.trim(u8, ver_result.stdout, " \n\r");
+            try stdout.print("Active Zig: {s} ({s})\n", .{ active, ver });
+            try stdout.flush();
+        }
+    }
+
     // Clean up the downloaded archive
     std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
 }
