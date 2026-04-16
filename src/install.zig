@@ -159,8 +159,14 @@ fn installVersion(
     // Rename the extracted directory (e.g., zig-macos-x86_64-0.13.0 → 0.13.0)
     try renameExtractedDir(zvm, allocator, version, target, stderr);
 
-    // Create symlink so this version becomes the active one
-    try zvm.setBin(version);
+    // Only auto-activate if there is no currently active version
+    const active_opt = zvm.getActiveVersion(allocator);
+    const has_active = active_opt != null;
+    if (active_opt) |active| {
+        allocator.free(active);
+    } else {
+        try zvm.setBin(version);
+    }
 
     // Clean up the downloaded archive
     std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
@@ -189,7 +195,11 @@ fn installVersion(
         return;
     }
 
-    try stdout.print("Now using Zig {s}\n", .{version});
+    if (has_active) {
+        try stdout.print("Use `zvm use {s}` to activate this version.\n", .{version});
+    } else {
+        try stdout.print("Now using Zig {s}\n", .{version});
+    }
     try stdout.flush();
 
     // Optionally install ZLS alongside Zig
