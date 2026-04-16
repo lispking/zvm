@@ -342,19 +342,7 @@ src/
 └── completion.zig    Shell completion generation (zsh/bash)
 ```
 
-## Comparison with the Go Version
-
-This is a rewrite of [tristanisham/zvm](https://github.com/tristanisham/zvm) (Go). Key differences:
-
-| | Go (original) | Zig (this) |
-|---|---|---|
-| Binary size | ~10MB | ~1-2MB |
-| Dependencies | Go runtime | None (static) |
-| Build tool | Go compiler | Zig compiler |
-| Shell completion | No | Yes (zsh, bash) |
-| Mirror selection | Sequential | Latency-based |
-| Proxy support | No | Yes (HTTP/SOCKS5) |
-| Windows support | Yes | Yes (junctions) |
+This project was inspired by [tristanisham/zvm](https://github.com/tristanisham/zvm) (Go).
 
 ## License
 
