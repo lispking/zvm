@@ -20,7 +20,6 @@ pub fn extractTarXz(allocator: std.mem.Allocator, io: std.Io, archive_path: []co
 
 /// Extract a .zip archive using Zig's stdlib zip implementation.
 pub fn extractZip(allocator: std.mem.Allocator, io: std.Io, archive_path: []const u8, output_dir: []const u8) !void {
-    _ = output_dir;
     const file = try std.Io.Dir.cwd().openFile(io, archive_path, .{});
     defer file.close(io);
 
@@ -30,8 +29,12 @@ pub fn extractZip(allocator: std.mem.Allocator, io: std.Io, archive_path: []cons
     var diagnostics: std.zip.Diagnostics = .{ .allocator = allocator };
     defer diagnostics.deinit();
 
-    try std.zip.extract(std.Io.Dir.cwd(), &reader, .{
+    var out_dir = try std.Io.Dir.cwd().openDir(io, output_dir, .{});
+    defer out_dir.close(io);
+
+    try std.zip.extract(out_dir, &reader, .{
         .diagnostics = &diagnostics,
+        .allow_backslashes = true,
     });
 }
 
