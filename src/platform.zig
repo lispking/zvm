@@ -73,8 +73,20 @@ pub fn createSymlink(target: []const u8, link_path: []const u8, io: std.Io) !voi
         // Junctions work without administrator privileges and behave like
         // directory symlinks — the linked path resolves transparently.
         std.Io.Dir.cwd().deleteDir(io, link_path) catch {};
+
+        // cmd.exe treats '/' as a flag prefix (e.g. "/share" looks like a switch),
+        // so normalize both paths to backslashes before passing them to mklink.
+        var link_norm: [std.fs.max_path_bytes]u8 = undefined;
+        var tgt_norm: [std.fs.max_path_bytes]u8 = undefined;
+        if (link_path.len > link_norm.len or target.len > tgt_norm.len)
+            return error.SymlinkFailed;
+        @memcpy(link_norm[0..link_path.len], link_path);
+        @memcpy(tgt_norm[0..target.len], target);
+        std.mem.replaceScalar(u8, link_norm[0..link_path.len], '/', '\\');
+        std.mem.replaceScalar(u8, tgt_norm[0..target.len], '/', '\\');
+
         const result = std.process.run(std.heap.page_allocator, io, .{
-            .argv = &.{ "cmd", "/c", "mklink", "/J", link_path, target },
+            .argv = &.{ "cmd", "/c", "mklink", "/J", link_norm[0..link_path.len], tgt_norm[0..target.len] },
         }) catch return error.SymlinkFailed;
         defer std.heap.page_allocator.free(result.stdout);
         defer std.heap.page_allocator.free(result.stderr);
