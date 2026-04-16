@@ -51,24 +51,30 @@ pub const Settings = struct {
         proxy: []const u8 = "",
     };
 
+    /// Return a copy of this Settings with all string fields heap-allocated.
+    /// The caller owns the returned value and must free all string fields.
+    fn toOwned(self: Settings, allocator: std.mem.Allocator) !Settings {
+        return Settings{
+            .version_map_url = try allocator.dupe(u8, self.version_map_url),
+            .zls_vmu = try allocator.dupe(u8, self.zls_vmu),
+            .mirror_list_url = try allocator.dupe(u8, self.mirror_list_url),
+            .use_color = self.use_color,
+            .always_force_install = self.always_force_install,
+            .preferred_mirror = try allocator.dupe(u8, self.preferred_mirror),
+            .mirror_updated_at = self.mirror_updated_at,
+            .proxy = try allocator.dupe(u8, self.proxy),
+            .path = self.path,
+        };
+    }
+
     /// Load settings from a JSON file, or create with defaults if not found.
     /// Takes ownership of the `path` parameter.
     pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Settings {
         const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                // Create new settings file with defaults.
-                // Dupe all string fields so deinit can safely free them all.
-                var settings = Settings{
-                    .version_map_url = try allocator.dupe(u8, default.version_map_url),
-                    .zls_vmu = try allocator.dupe(u8, default.zls_vmu),
-                    .mirror_list_url = try allocator.dupe(u8, default.mirror_list_url),
-                    .use_color = default.use_color,
-                    .always_force_install = default.always_force_install,
-                    .preferred_mirror = try allocator.dupe(u8, default.preferred_mirror),
-                    .mirror_updated_at = default.mirror_updated_at,
-                    .proxy = try allocator.dupe(u8, default.proxy),
-                    .path = path,
-                };
+                // Create new settings file with defaults; all strings must be heap-owned.
+                var settings = try default.toOwned(allocator);
+                settings.path = path;
                 try settings.save(allocator, io);
                 return settings;
             },
@@ -87,8 +93,8 @@ pub const Settings = struct {
             content,
             .{ .ignore_unknown_fields = true },
         ) catch {
-            // If parsing fails, return defaults
-            var settings = default;
+            // If parsing fails, return defaults; all strings must be heap-owned.
+            var settings = try default.toOwned(allocator);
             settings.path = path;
             return settings;
         };
