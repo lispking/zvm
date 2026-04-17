@@ -5,6 +5,27 @@
 
 const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
+const terminal = @import("../core/terminal.zig");
+
+/// Supported proxy schemes.
+const valid_schemes = [_][]const u8{ "http://", "https://", "socks5://", "socks5h://", "socks4://", "socks4a://" };
+
+/// Validate that a proxy URL has a supported scheme and a host component.
+fn validateProxyUrl(url: []const u8) !void {
+    // Must have a recognized scheme
+    var has_scheme = false;
+    for (valid_schemes) |scheme| {
+        if (std.mem.startsWith(u8, url, scheme)) {
+            has_scheme = true;
+            break;
+        }
+    }
+    if (!has_scheme) return error.InvalidUrl;
+
+    // Must parse as a valid URI with a host
+    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+    if (uri.host == null) return error.InvalidUrl;
+}
 
 /// Set or display the HTTP/HTTPS proxy.
 /// "default" clears the proxy (auto-detect from env vars).
@@ -16,13 +37,23 @@ pub fn run(
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
-    _ = stderr;
-
     if (url) |u| {
         if (std.mem.eql(u8, u, "default")) {
             try zvm.settings.setProxy(allocator, zvm.io, "");
             try stdout.print("Reset proxy to auto-detect (from environment).\n", .{});
         } else {
+            validateProxyUrl(u) catch {
+                try terminal.printError(stderr, "Invalid proxy URL");
+                try stderr.print(
+                    \\Supported formats:
+                    \\  http://host:port
+                    \\  https://host:port
+                    \\  socks5://host:port
+                    \\
+                , .{});
+                try stderr.flush();
+                return;
+            };
             try zvm.settings.setProxy(allocator, zvm.io, u);
             try stdout.print("Set proxy to {s}\n", .{u});
         }
