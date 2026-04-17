@@ -8,8 +8,25 @@ on:
 
 jobs:
   build:
-    name: Build & Test
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: native
+            os: ubuntu-latest
+          - target: x86_64-linux
+            os: ubuntu-latest
+          - target: aarch64-linux
+            os: ubuntu-latest
+          - target: x86_64-macos
+            os: macos-latest
+          - target: aarch64-macos
+            os: macos-latest
+          - target: x86_64-windows-gnu
+            os: windows-latest
+          - target: aarch64-windows-gnu
+            os: windows-latest
 
     steps:
       - name: Checkout repository
@@ -21,8 +38,21 @@ jobs:
           version: '0.16.0'
 
       - name: Build
-        run: zig build
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
         shell: bash
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
 
       - name: Run tests
         run: zig build test
