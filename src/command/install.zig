@@ -7,7 +7,7 @@ const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
 const cli = @import("../cli.zig");
 const platform = @import("../core/platform.zig");
-const terminal = @import("../core/terminal.zig");
+const Console = @import("../core/Console.zig");
 const version_map = @import("../network/version_map.zig");
 const http_client = @import("../network/http_client.zig");
 const archive = @import("archive.zig");
@@ -21,8 +21,7 @@ pub fn run(
     allocator: std.mem.Allocator,
     version: []const u8,
     flags: cli.InstallFlags,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     // Get system info for platform-specific download
     const sys_info = platform.zigStyleSystemInfo();
@@ -30,11 +29,10 @@ pub fn run(
     const target = platform.platformTarget(&platform_buf, sys_info);
 
     // Fetch version map from configured URL
-    try stdout.print("Fetching version map...\n", .{});
-    try stdout.flush();
+    console.plain("Fetching version map...", .{});
 
     const parsed_map = version_map.fetchVersionMap(allocator, zvm.io, zvm.environ_map, zvm.settings.version_map_url, zvm.settings.proxy) catch |err| {
-        try terminal.printError(stderr, "Failed to fetch version map");
+        console.err("Failed to fetch version map", .{});
         return err;
     };
     defer parsed_map.deinit();
@@ -54,7 +52,7 @@ pub fn run(
                     .argv = &.{ zig_path, "version" },
                     .stdout_limit = .limited(1024),
                 }) catch {
-                    try installVersion(zvm, allocator, version, target, vmap, flags, stdout, stderr);
+                    try installVersion(zvm, allocator, version, target, vmap, flags, console);
                     return;
                 };
                 defer allocator.free(result.stdout);
@@ -62,19 +60,17 @@ pub fn run(
 
                 const installed_ver = std.mem.trim(u8, result.stdout, " \n\r");
                 if (std.mem.eql(u8, installed_ver, remote_ver)) {
-                    try stdout.print("Master is already up to date ({s}). Use --force to reinstall.\n", .{installed_ver});
-                    try stdout.flush();
+                    console.plain("Master is already up to date ({s}). Use --force to reinstall.", .{installed_ver});
                     return;
                 }
             }
         } else {
-            try stdout.print("Zig {s} is already installed. Use --force to reinstall.\n", .{version});
-            try stdout.flush();
+            console.plain("Zig {s} is already installed. Use --force to reinstall.", .{version});
             return;
         }
     }
 
-    try installVersion(zvm, allocator, version, target, vmap, flags, stdout, stderr);
+    try installVersion(zvm, allocator, version, target, vmap, flags, console);
 }
 
 /// Core installation logic: download, verify, extract, rename, symlink.
@@ -85,19 +81,17 @@ fn installVersion(
     target: []const u8,
     vmap: *const version_map.VersionMap,
     flags: cli.InstallFlags,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     // Resolve the tarball download URL from the version map
     const tar_url = version_map.getTarPath(version, target, vmap) catch {
-        try terminal.printError(stderr, "Failed to find download for this version/platform");
+        console.err("Failed to find download for this version/platform", .{});
         return error.UnsupportedVersion;
     };
 
     // Get expected SHA256 checksum (optional — warns if missing)
     const shasum = version_map.getVersionShasum(version, target, vmap) catch blk: {
-        try stdout.print("Warning: No shasum found, skipping verification.\n", .{});
-        try stdout.flush();
+        console.plain("Warning: No shasum found, skipping verification.", .{});
         break :blk null;
     };
 
@@ -108,8 +102,9 @@ fn installVersion(
     const archive_path = try std.fmt.bufPrint(&archive_path_buf, "{s}/{s}", .{ zvm.cache_dir, archive_name });
 
     // Download archive (with optional mirror support)
-    try stdout.print("Downloading Zig {s}...\n", .{version});
-    try stdout.flush();
+    console.plain("Downloading Zig {s}...", .{version});
+
+    const stdout = console.stdout.writer;
 
     const actual_url = if (flags.nomirror) blk: {
         try http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, tar_url, archive_path, zvm.settings.proxy, stdout);
@@ -124,40 +119,37 @@ fn installVersion(
 
     // Show the actual download source
     if (actual_url.ptr != tar_url.ptr) {
-        try stdout.print("  from: {s}\n", .{actual_url});
-        try stdout.flush();
+        console.plain("  from: {s}", .{actual_url});
         allocator.free(actual_url);
     }
 
     // Verify SHA256 checksum
     if (shasum) |expected| {
-        try stdout.print("Verifying checksum...\n", .{});
-        try stdout.flush();
+        console.plain("Verifying checksum...", .{});
 
         const matches = crypto.verifyFileSha256(zvm.io, archive_path, expected) catch {
-            try terminal.printError(stderr, "Failed to verify checksum");
+            console.err("Failed to verify checksum", .{});
             return error.ShasumMismatch;
         };
 
         if (!matches) {
-            try terminal.printError(stderr, "SHA256 checksum mismatch!");
+            console.err("SHA256 checksum mismatch!", .{});
             std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
             return error.ShasumMismatch;
         }
-        try terminal.printSuccess(stdout, "Checksum verified.");
+        console.success("Checksum verified.", .{});
     }
 
     // Extract the archive
-    try stdout.print("Extracting...\n", .{});
-    try stdout.flush();
+    console.plain("Extracting...", .{});
 
     archive.extractArchive(allocator, zvm.io, archive_path, zvm.data_dir) catch {
-        try terminal.printError(stderr, "Failed to extract archive");
+        console.err("Failed to extract archive", .{});
         return error.ExtractionFailed;
     };
 
     // Rename the extracted directory (e.g., zig-macos-x86_64-0.13.0 → 0.13.0)
-    try renameExtractedDir(zvm, allocator, version, target, stderr);
+    try renameExtractedDir(zvm, allocator, version, target, console);
 
     // Only auto-activate if there is no currently active version
     const active_opt = zvm.getActiveVersion(allocator);
@@ -170,19 +162,17 @@ fn installVersion(
 
     // Clean up the downloaded archive
     std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
-
     // Clean up any leftover extracted zig-* directories
     cleanupExtractedDirs(zvm);
 
-    try terminal.printSuccess(stdout, "Installed Zig");
+    console.success("Installed Zig", .{});
 
     // Verify the installed binary can actually compile (detect platform compatibility issues)
-    try stdout.print("Verifying installation...\n", .{});
-    try stdout.flush();
+    console.plain("Verifying installation...", .{});
 
     if (!try verifyInstall(zvm, allocator, version)) {
-        try terminal.printWarning(stdout, "This Zig version has linking issues on your platform.");
-        try stdout.print(
+        console.warn("This Zig version has linking issues on your platform.", .{});
+        console.plain(
             \\This is a known issue with official Zig releases on macOS 26+.
             \\The binary can run basic commands but cannot compile programs.
             \\
@@ -191,20 +181,18 @@ fn installVersion(
             \\  2. Use Mach engine builds:     zvm vmu zig mach && zvm install <version>
             \\
         , .{});
-        try stdout.flush();
         return;
     }
 
     if (has_active) {
-        try stdout.print("Use `zvm use {s}` to activate this version.\n", .{version});
+        console.plain("Use `zvm use {s}` to activate this version.", .{version});
     } else {
-        try stdout.print("Now using Zig {s}\n", .{version});
+        console.plain("Now using Zig {s}", .{version});
     }
-    try stdout.flush();
 
     // Optionally install ZLS alongside Zig
     if (flags.zls) {
-        try installZls(zvm, allocator, version, flags.full, stdout, stderr);
+        try installZls(zvm, allocator, version, flags.full, console);
     }
 }
 
@@ -217,7 +205,7 @@ fn renameExtractedDir(
     allocator: std.mem.Allocator,
     version: []const u8,
     target: []const u8,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     _ = allocator;
 
@@ -254,7 +242,7 @@ fn renameExtractedDir(
 
     // Rename the extracted directory to the version name
     dir.rename(found.?, dir, version, zvm.io) catch {
-        try terminal.printError(stderr, "Failed to rename extracted directory");
+        console.err("Failed to rename extracted directory", .{});
         return;
     };
 }
@@ -330,11 +318,9 @@ fn installZls(
     allocator: std.mem.Allocator,
     version: []const u8,
     full_compat: bool,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
-    try stdout.print("Installing ZLS for Zig {s}...\n", .{version});
-    try stdout.flush();
+    console.plain("Installing ZLS for Zig {s}...", .{version});
 
     // Get the installed Zig version string
     var ver_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -346,7 +332,7 @@ fn installZls(
         .argv = &.{ zig_path, "version" },
         .stdout_limit = .limited(1024),
     }) catch {
-        try terminal.printError(stderr, "Failed to get Zig version for ZLS lookup");
+        console.err("Failed to get Zig version for ZLS lookup", .{});
         return;
     };
     defer allocator.free(result.stdout);
@@ -364,13 +350,13 @@ fn installZls(
     defer allocator.free(zls_url);
 
     const zls_response = http_client.downloadToMemoryWithProxy(allocator, zvm.io, zvm.environ_map, zls_url, zvm.settings.proxy) catch {
-        try terminal.printError(stderr, "Failed to query ZLS version");
+        console.err("Failed to query ZLS version", .{});
         return;
     };
     defer allocator.free(zls_response);
 
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, zls_response, .{}) catch {
-        try terminal.printError(stderr, "Failed to parse ZLS response");
+        console.err("Failed to parse ZLS response", .{});
         return;
     };
     defer parsed.deinit();
@@ -378,7 +364,7 @@ fn installZls(
     const zls_data = switch (parsed.value) {
         .object => |obj| obj,
         else => {
-            try terminal.printError(stderr, "Invalid ZLS response");
+            console.err("Invalid ZLS response", .{});
             return;
         },
     };
@@ -409,7 +395,7 @@ fn installZls(
     }
 
     const zls_tarball = tarball_url orelse {
-        try terminal.printError(stderr, "No ZLS build found for your platform");
+        console.err("No ZLS build found for your platform", .{});
         return;
     };
 
@@ -419,7 +405,7 @@ fn installZls(
     var archive_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const zls_archive_path = try std.fmt.bufPrint(&archive_buf, "{s}/{s}", .{ zvm.cache_dir, zls_archive_name });
 
-    try http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, zls_tarball, zls_archive_path, zvm.settings.proxy, stdout);
+    try http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, zls_tarball, zls_archive_path, zvm.settings.proxy, console.stdout.writer);
 
     // Extract to a temporary directory
     var temp_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
@@ -427,7 +413,7 @@ fn installZls(
     std.Io.Dir.cwd().createDirPath(zvm.io, temp_dir) catch {};
 
     archive.extractArchive(allocator, zvm.io, zls_archive_path, temp_dir) catch {
-        try terminal.printError(stderr, "Failed to extract ZLS archive");
+        console.err("Failed to extract ZLS archive", .{});
         return;
     };
 
@@ -460,8 +446,7 @@ fn installZls(
                     _ = std.process.run(allocator, zvm.io, .{
                         .argv = &.{ "chmod", "+x", dst },
                     }) catch {};
-                    try terminal.printSuccess(stdout, "Installed ZLS");
-                    try stdout.flush();
+                    console.success("Installed ZLS", .{});
                 }
             }
         }

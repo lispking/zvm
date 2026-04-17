@@ -3,17 +3,16 @@
 
 const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
+const Console = @import("../core/Console.zig");
 
 /// Remove archive files (.zip, .xz, .tar, .tar.xz) from the cache directory.
 /// These are leftover files from downloads that are no longer needed after extraction.
 pub fn run(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     _ = allocator;
-    _ = stderr;
 
     const extensions = [_][]const u8{ ".zip", ".xz", ".tar", ".tar.xz" };
 
@@ -33,6 +32,5 @@ pub fn run(
         }
     }
 
-    try stdout.print("Cleaned {d} artifact(s)\n", .{count});
-    try stdout.flush();
+    console.plain("Cleaned {d} artifact(s)", .{count});
 }

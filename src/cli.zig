@@ -121,14 +121,21 @@ const command_aliases = std.StaticStringMap(Command).initComptime(.{
     .{ "-v", .version },
 });
 
-pub fn parse(allocator: std.mem.Allocator, args_data: std.process.Args) !struct { global: GlobalFlags, cmd: ParsedCommand } {
-    var args = std.process.Args.Iterator.initAllocator(args_data, allocator) catch return error.OutOfMemory;
+pub fn parse(allocator: std.mem.Allocator, init: std.process.Init.Minimal) !struct { global: GlobalFlags, cmd: ParsedCommand } {
+    var args = std.process.Args.Iterator.initAllocator(init.args, allocator) catch return error.OutOfMemory;
     defer args.deinit();
 
     // Skip program name
     _ = args.skip();
 
     var global_flags: GlobalFlags = .{};
+
+    // Check environment variables for color settings
+    if (init.environ.containsConstant("NO_COLOR")) {
+        global_flags.color = false;
+    } else if (init.environ.containsConstant("CLICOLOR_FORCE")) {
+        global_flags.color = true;
+    }
 
     // Parse global flags first
     var maybe_cmd: ?Command = null;
@@ -137,9 +144,8 @@ pub fn parse(allocator: std.mem.Allocator, args_data: std.process.Args) !struct 
         if (std.mem.eql(u8, arg, "--color")) {
             const val = args.next() orelse return error.MissingArgument;
             global_flags.color = parseColorValue(val);
-        } else if (std.mem.startsWith(u8, arg, "--color=")) {
-            const val = arg["--color=".len..];
-            global_flags.color = parseColorValue(val);
+        } else if (std.mem.cutPrefix(u8, arg, "--color=")) |val| {
+            if (parseColorValue(val)) |c| global_flags.color = c;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return .{ .global = global_flags, .cmd = .help };
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {

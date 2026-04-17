@@ -7,7 +7,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const zvm_mod = @import("zvm.zig");
 const http_client = @import("../network/http_client.zig");
-const terminal = @import("terminal.zig");
+const Console = @import("../core/Console.zig");
 
 /// Cache file name for the update check result.
 const cache_filename = "_update_check";
@@ -184,12 +184,12 @@ pub fn printUpdateHint(
     environ_map: *std.process.Environ.Map,
     cache_dir: []const u8,
     proxy: []const u8,
-    stdout: *std.Io.Writer,
+    console: Console,
 ) void {
     const latest = checkForUpdate(allocator, io, environ_map, cache_dir, proxy) orelse return;
     defer allocator.free(latest);
 
-    terminal.println(stdout, .yellow, "A new version of zvm is available: {s} (current: v{s})", .{ latest, VERSION }) catch {};
-    stdout.print("Run `zvm upgrade` to update.\n\n", .{}) catch {};
-    stdout.flush() catch {};
+    console.colorize(.stdout, .yellow, "A new version of zvm is available: {s} (current: v{s})", .{ latest, VERSION });
+    console.print(.stdout, "Run `zvm upgrade` to update.\n\n", .{});
+    console.flush(.stdout);
 }

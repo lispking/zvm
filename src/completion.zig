@@ -5,13 +5,15 @@
 
 const std = @import("std");
 const cli = @import("cli.zig");
+const Console = @import("core/Console.zig");
 
-pub fn run(shell: cli.ShellType, writer: *std.Io.Writer) !void {
+pub fn run(shell: cli.ShellType, console: Console) !void {
+    const writer = console.stdout.writer;
     switch (shell) {
         .zsh => try writeZshCompletion(writer),
         .bash => try writeBashCompletion(writer),
     }
-    try writer.flush();
+    console.flush(.stdout);
 }
 
 // ─── Comptime metadata ───────────────────────────────────

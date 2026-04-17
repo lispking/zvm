@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
+const Console = @import("../core/Console.zig");
 
 /// Run a Zig command using a specific installed version.
 /// All arguments after the version are passed through to the zig binary.
@@ -12,17 +13,10 @@ pub fn run(
     allocator: std.mem.Allocator,
     version: []const u8,
     args: []const []const u8,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
-    _ = stdout;
-    _ = stderr;
-
     if (!zvm.isVersionInstalled(version)) {
-        var buf: [4096]u8 = undefined;
-        var stderr_writer = std.Io.File.stderr().writer(zvm.io, &buf);
-        try stderr_writer.interface.print("Zig {s} is not installed. Run 'zvm install {s}' first.\n", .{ version, version });
-        try stderr_writer.interface.flush();
+        console.err("Zig {s} is not installed. Run 'zvm install {s}' first.", .{ version, version });
         std.process.exit(1);
     }
 
@@ -44,11 +38,7 @@ pub fn run(
     var child = std.process.spawn(zvm.io, .{
         .argv = argv.items,
     }) catch {
-        var buf: [4096]u8 = undefined;
-        var stderr_writer = std.Io.File.stderr().writer(zvm.io, &buf);
-        try stderr_writer.interface.print("Failed to spawn zig {s}\n", .{version});
-        try stderr_writer.interface.flush();
-        std.process.exit(1);
+        console.fatal("Failed to spawn zig {s}", .{version});
     };
     const term = child.wait(zvm.io) catch {
         std.process.exit(1);
@@ -58,7 +48,8 @@ pub fn run(
     switch (term) {
         .exited => |code| std.process.exit(code),
         .signal => {
-            std.debug.print("Process killed by signal\n", .{});
+            console.println(.stderr, "Process killed by signal", .{});
+            console.flush(.stderr);
             std.process.exit(1);
         },
         else => std.process.exit(1),

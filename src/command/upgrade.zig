@@ -6,7 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const zvm_mod = @import("../core/zvm.zig");
-const terminal = @import("../core/terminal.zig");
+const Console = @import("../core/Console.zig");
 const platform = @import("../core/platform.zig");
 const http_client = @import("../network/http_client.zig");
 const update_check = @import("../core/update_check.zig");
@@ -42,17 +42,15 @@ pub fn run(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
     current_version: []const u8,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
-    try stdout.print("Current version: v{s} ({s})\n", .{ current_version, build_options.git_commit });
-    try stdout.print("Checking for zvm updates...\n", .{});
-    try stdout.flush();
+    console.plain("Current version: v{s} ({s})", .{ current_version, build_options.git_commit });
+    console.plain("Checking for zvm updates...", .{});
 
     // Fetch latest release info from GitHub API (single request)
     const proxy = zvm.settings.proxy;
     const release_json = http_client.downloadToMemoryWithProxy(allocator, zvm.io, zvm.environ_map, "https://api.github.com/repos/lispking/zvm/releases/latest", proxy) catch {
-        try terminal.printError(stderr, "Failed to check for updates");
+        console.err("Failed to check for updates", .{});
         return;
     };
     defer allocator.free(release_json);
@@ -60,7 +58,7 @@ pub fn run(
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, release_json, .{
         .ignore_unknown_fields = true,
     }) catch {
-        try terminal.printError(stderr, "Failed to parse release info");
+        console.err("Failed to parse release info", .{});
         return;
     };
     defer parsed.deinit();
@@ -69,19 +67,17 @@ pub fn run(
 
     // Extract version from release JSON (reuses shared logic)
     const latest_version = update_check.extractVersionFromRelease(release) orelse {
-        try terminal.printError(stderr, "Invalid release response");
+        console.err("Invalid release response", .{});
         return;
     };
 
-    try stdout.print("Latest version: {s}\n", .{latest_version});
-    try stdout.flush();
+    console.plain("Latest version: {s}", .{latest_version});
 
     // Compare versions and skip download if already up-to-date
     const current_stripped = update_check.stripVPrefix(current_version);
     const latest_stripped = update_check.stripVPrefix(latest_version);
     if (!update_check.versionGt(latest_stripped, current_stripped)) {
-        try terminal.printSuccess(stdout, "Already up-to-date!");
-        try stdout.flush();
+        console.success("Already up-to-date!", .{});
         return;
     }
 
@@ -93,7 +89,7 @@ pub fn run(
     // Find the matching release asset for this platform
     const assets = switch (release) {
         .object => |obj| obj.get("assets") orelse {
-            try terminal.printError(stderr, "No assets found");
+            console.err("No assets found", .{});
             return;
         },
         else => return,
@@ -129,7 +125,7 @@ pub fn run(
     }
 
     const url = download_url orelse {
-        try terminal.printError(stderr, "No matching binary found for your platform");
+        console.err("No matching binary found for your platform", .{});
         return;
     };
 
@@ -141,23 +137,21 @@ pub fn run(
     var buf2: [std.fs.max_path_bytes * 2]u8 = undefined;
     const archive_path = try std.fmt.bufPrint(&buf2, "{s}/zvm-update.tar.gz", .{self_dir});
 
-    try stdout.print("Downloading {s}...\n", .{latest_version});
-    try stdout.flush();
+    console.plain("Downloading {s}...", .{latest_version});
 
-    http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, url, archive_path, proxy, stdout) catch {
-        try terminal.printError(stderr, "Failed to download update");
+    http_client.downloadToFileWithProxy(allocator, zvm.io, zvm.environ_map, url, archive_path, proxy, console.stdout.writer) catch {
+        console.err("Failed to download update", .{});
         std.Io.Dir.cwd().deleteFile(zvm.io, archive_path) catch {};
         return;
     };
 
-    // Extract the archive
-    try stdout.print("Installing update...\n", .{});
-    try stdout.flush();
+    console.plain("Installing update...", .{});
 
+    // Extract the archive
     const result = std.process.run(allocator, zvm.io, .{
         .argv = &.{ "tar", "-xf", archive_path, "-C", self_dir },
     }) catch {
-        try terminal.printError(stderr, "Failed to extract update");
+        console.err("Failed to extract update", .{});
         return;
     };
     defer allocator.free(result.stdout);
@@ -179,17 +173,17 @@ pub fn run(
         } else {
             var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
             const exe_path_len = std.process.executablePath(zvm.io, &exe_buf) catch {
-                try terminal.printError(stderr, "Could not determine running binary path");
+                console.err("Could not determine running binary path", .{});
                 return;
             };
             const exe_path = exe_buf[0..exe_path_len];
             if (std.Io.Dir.path.dirname(exe_path)) |dir_path| {
                 break :blk allocator.dupe(u8, dir_path) catch {
-                    try terminal.printError(stderr, "Out of memory");
+                    console.err("Out of memory", .{});
                     return;
                 };
             }
-            try terminal.printError(stderr, "Could not determine install directory");
+            console.err("Could not determine install directory", .{});
             return;
         }
     };
@@ -198,7 +192,7 @@ pub fn run(
     // Find the extracted zvm binary (may be nested in a versioned subdirectory)
     var src_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const src_path = findBinary(allocator, zvm.io, self_dir, exe_name, &src_buf) catch {
-        try terminal.printError(stderr, "Could not find extracted zvm binary");
+        console.err("Could not find extracted zvm binary", .{});
         return;
     };
 
@@ -215,7 +209,7 @@ pub fn run(
 
     // Stream-copy the new binary
     platform.copyFile(zvm.io, src_path, dst_path) catch {
-        try terminal.printError(stderr, "Failed to copy binary");
+        console.err("Failed to copy binary", .{});
         return;
     };
 
@@ -229,9 +223,8 @@ pub fn run(
     // Clean up old binary
     std.Io.Dir.cwd().deleteFile(zvm.io, old_path) catch {};
 
-    try terminal.printSuccess(stdout, "Updated zvm to latest version!");
-    try stdout.print("Now running zvm {s}\n", .{latest_version});
-    try stdout.flush();
+    console.success("Updated zvm to latest version!", .{});
+    console.plain("Now running zvm {s}", .{latest_version});
 
     // Show the active Zig version
     if (zvm.getActiveVersion(allocator)) |active| {
@@ -250,8 +243,7 @@ pub fn run(
 
         if (ver_result.stdout.len > 0) {
             const ver = std.mem.trim(u8, ver_result.stdout, " \n\r");
-            try stdout.print("Active Zig: {s} ({s})\n", .{ active, ver });
-            try stdout.flush();
+            console.plain("Active Zig: {s} ({s})", .{ active, ver });
         }
     }
 

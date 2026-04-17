@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
-const terminal = @import("../core/terminal.zig");
+const Console = @import("../core/Console.zig");
 const version_map = @import("../network/version_map.zig");
 
 pub const ListFlags = @import("../cli.zig").ListFlags;
@@ -17,21 +17,25 @@ pub fn run(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
     flags: ListFlags,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     // Show configured version map URLs
     if (flags.vmu) {
-        try stdout.print("Zig Version Map: {s}\n", .{zvm.settings.version_map_url});
-        try stdout.print("ZLS VMU:         {s}\n", .{zvm.settings.zls_vmu});
-        try stdout.print("Mirror List:     {s}\n", .{zvm.settings.mirror_list_url});
-        try stdout.flush();
+        console.plain(
+            \\Zig Version Map: {s}
+            \\ZLS VMU:         {s}
+            \\Mirror List:     {s}
+        , .{
+            zvm.settings.version_map_url,
+            zvm.settings.zls_vmu,
+            zvm.settings.mirror_list_url,
+        });
         return;
     }
 
     // List remote versions from the version map
     if (flags.all) {
-        try listRemote(zvm, allocator, stdout, stderr);
+        try listRemote(zvm, allocator, console);
         return;
     }
 
@@ -46,21 +50,23 @@ pub fn run(
     defer if (active) |a| allocator.free(a);
 
     if (versions.items.len == 0) {
-        try stdout.print("No Zig versions installed.\n", .{});
-        try stdout.print("Use 'zvm install <version>' to install one.\n", .{});
-        try stdout.flush();
+        console.plain(
+            \\No Zig versions installed.
+            \\Use 'zvm install <version>' to install one.
+        , .{});
         return;
     }
 
     for (versions.items) |ver| {
         const is_active = if (active) |a| std.mem.eql(u8, a, ver) else false;
         if (is_active) {
-            try terminal.println(stdout, .green, "{s} (active)", .{ver});
+            console.colorize(.stdout, .green, "{s} (active)", .{ver});
         } else {
-            try stdout.print("{s}\n", .{ver});
+            console.print(.stdout, "{s}", .{ver});
         }
+        console.newline(.stdout);
     }
-    try stdout.flush();
+    console.flush(.stdout);
 }
 
 /// Fetch and display all remote versions from the version map.
@@ -68,14 +74,12 @@ pub fn run(
 fn listRemote(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
-    try stdout.print("Fetching available versions...\n", .{});
-    try stdout.flush();
+    console.plain("Fetching available versions...", .{});
 
     const parsed = version_map.fetchVersionMap(allocator, zvm.io, zvm.environ_map, zvm.settings.version_map_url, zvm.settings.proxy) catch {
-        try terminal.printError(stderr, "Failed to fetch version map");
+        console.err("Failed to fetch version map", .{});
         return;
     };
     defer parsed.deinit();
@@ -100,8 +104,8 @@ fn listRemote(
     }
 
     // Print table header
-    try stdout.print("{s:<30} {s:<12}\n", .{ "Version", "Installed" });
-    try stdout.print("{s:<30} {s:<12}\n", .{ "-------", "---------" });
+    console.println(.stdout, "{s:<30} {s:<12}", .{ "Version", "Installed" });
+    console.println(.stdout, "{s:<30} {s:<12}", .{ "-------", "---------" });
 
     // Print master version first (with its dev build version number)
     if (vmap.get("master")) |master| {
@@ -112,15 +116,15 @@ fn listRemote(
         const is_installed = isInstalled(installed.items, "master");
         const is_active = if (active) |a| std.mem.eql(u8, a, "master") else false;
         const status = if (is_active) "active" else if (is_installed) "yes" else "";
-        try stdout.print("master ({s})", .{master_ver});
+        console.print(.stdout, "master ({s})", .{master_ver});
         if (status.len > 0) {
             if (is_active) {
-                try terminal.println(stdout, .green, "  {s}", .{status});
+                console.colorize(.stdout, .green, "  {s}", .{status});
             } else {
-                try stdout.print("  {s}\n", .{status});
+                console.println(.stdout, "  {s}", .{status});
             }
         } else {
-            try stdout.print("\n", .{});
+            console.newline(.stdout);
         }
     }
 
@@ -130,18 +134,17 @@ fn listRemote(
         const is_installed = isInstalled(installed.items, key);
         const is_active_flag = if (active) |a| std.mem.eql(u8, a, key) else false;
         const status = if (is_active_flag) "active" else if (is_installed) "yes" else "";
-        try stdout.print("{s}", .{key});
+        console.print(.stdout, "{s}", .{key});
         if (status.len > 0) {
             if (is_active_flag) {
-                try terminal.println(stdout, .green, "  {s}", .{status});
+                console.colorize(.stdout, .green, "  {s}", .{status});
             } else {
-                try stdout.print("  {s}\n", .{status});
+                console.print(.stdout, "  {s}", .{status});
             }
-        } else {
-            try stdout.print("\n", .{});
         }
+        console.newline(.stdout);
     }
-    try stdout.flush();
+    console.flush(.stdout);
 }
 
 /// Check if a version exists in the installed versions list.

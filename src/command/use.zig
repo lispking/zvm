@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const zvm_mod = @import("../core/zvm.zig");
+const Console = @import("../core/Console.zig");
 
 /// Switch to an installed Zig version by updating the bin symlink.
 /// Prints an error if the requested version is not installed.
@@ -11,20 +12,16 @@ pub fn run(
     allocator: std.mem.Allocator,
     version: []const u8,
     flags: anytype,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    console: Console,
 ) !void {
     _ = allocator;
     _ = flags;
-    _ = stderr;
 
     if (!zvm.isVersionInstalled(version)) {
-        try stdout.print("Zig {s} is not installed. Run 'zvm install {s}' first.\n", .{ version, version });
-        try stdout.flush();
+        console.plain("Zig {s} is not installed. Run 'zvm install {s}' first.", .{ version, version });
         return;
     }
 
     try zvm.setBin(version);
-    try stdout.print("Now using Zig {s}\n", .{version});
-    try stdout.flush();
+    console.plain("Now using Zig {s}", .{version});
 }
