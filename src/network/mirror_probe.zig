@@ -1,228 +1,127 @@
-//! Concurrent mirror latency probing.
-//! On POSIX: uses raw TCP connect (getaddrinfo + non-blocking socket + poll with timeout)
-//! for maximum parallelism — completely bypasses std.http.Client and std.Io.
-//! On Windows: uses std.http.Client per probe thread (Winsock API not fully wrapped in Zig 0.16).
-//! A background ticker thread provides real-time progress display.
-//!
-//! Cross-compilation note: native_os (builtin.os.tag) is a comptime constant, so
-//! `if (native_os == .windows) return;` guards prevent the dead POSIX branch from
-//! being type-checked on Windows, avoiding errors from unavailable libc symbols.
+//! Sequential mirror probing.
+//! Tests each mirror one by one, measuring both latency (HTTP HEAD round-trip)
+//! and throughput (5-second download to NUL). Results are displayed immediately
+//! as each mirror is tested, giving the user real-time visibility.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const native_os = builtin.os.tag;
-const http_client = @import("http_client.zig");
+
 const proxy_tunnel = @import("proxy_tunnel.zig");
 
-/// Per-probe timeout in seconds.
-const PROBE_TIMEOUT_S: u64 = 2;
-
-/// A candidate URL with its measured latency.
+/// A candidate URL with its measured latency and throughput.
 pub const MirrorCandidate = struct {
     url: []const u8,
+    /// HTTP HEAD round-trip time
     latency_ns: u64,
+    /// Bytes per second (0 = bandwidth measurement failed)
+    bandwidth_bps: u64,
     owned: bool,
 };
 
-/// Result of a single latency probe, written by a probe thread.
-const ProbeResult = struct {
-    url: []const u8,
-    latency_ns: u64,
-};
-
-/// Context passed to each probe thread.
-const ProbeThreadContext = struct {
-    allocator: std.mem.Allocator,
-    url: []const u8,
-    result: *?ProbeResult,
-    done: *std.atomic.Value(usize),
-    // Fields used only by Windows fallback
-    io: ?std.Io = null,
-    environ_map: ?*std.process.Environ.Map = null,
-    proxy: []const u8 = "",
-};
-
-/// Shared state for the background progress ticker thread.
-const TickerContext = struct {
-    total: usize,
-    done: *std.atomic.Value(usize),
-    start_ns: i96,
-    stop: std.atomic.Value(bool),
-    current_url: []const u8 = "",
-};
-
-/// Background thread that refreshes the progress display at a fixed interval.
-/// POSIX-only: uses clock_gettime, nanosleep, and write(2).
-fn tickerThread(ctx: *TickerContext) void {
-    if (native_os == .windows) return;
-
-    var latency_buf: [64]u8 = undefined;
-    var msg_buf: [256]u8 = undefined;
-    const req: std.c.timespec = .{ .sec = 0, .nsec = 100_000_000 }; // 100ms
-
-    while (!ctx.stop.load(.acquire)) {
-        var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(.MONOTONIC, &ts);
-        const now_ns: i96 = @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
-        const elapsed_ns: u64 = if (now_ns > ctx.start_ns) @intCast(now_ns - ctx.start_ns) else 0;
-        const elapsed_str = formatLatency(&latency_buf, elapsed_ns);
-        const done_val = ctx.done.load(.monotonic);
-        const pct: u32 = if (ctx.total > 0) @intCast(done_val * 100 / ctx.total) else 0;
-        const msg = std.fmt.bufPrint(&msg_buf, "\x1b[2K\r  Probing: {s} ... {d}% ({s})", .{ shortUrl(ctx.current_url), pct, elapsed_str }) catch return;
-        _ = std.c.write(2, msg.ptr, msg.len);
-        _ = std.c.nanosleep(&req, null);
-    }
-}
-
 /// ============================================================
-/// POSIX implementation — raw TCP connect
+/// Internal helpers
 /// ============================================================
-fn probeThreadMainPosix(ctx: *ProbeThreadContext) void {
-    if (native_os == .windows) {
-        // Never called on Windows (comptime switch in probeThreadMain),
-        // but guard prevents body from being type-checked on Windows.
-        _ = ctx.done.fetchAdd(1, .monotonic);
-        return;
-    }
-    defer _ = ctx.done.fetchAdd(1, .monotonic);
-
-    // Parse URL to extract host and port
-    const uri = std.Uri.parse(ctx.url) catch return;
-    const host_component = uri.host orelse return;
-    const host = host_component.percent_encoded;
-    const is_https = std.mem.eql(u8, uri.scheme, "https");
-    const port: u16 = uri.port orelse if (is_https) @as(u16, 443) else @as(u16, 80);
-
-    // Null-terminate host for getaddrinfo
-    const host_z = ctx.allocator.dupeZ(u8, host) catch return;
-    defer ctx.allocator.free(host_z);
-
-    var port_buf: [6:0]u8 = undefined;
-    const port_str = std.fmt.bufPrintZ(&port_buf, "{d}", .{port}) catch return;
-
-    // Start timing
-    var start_ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &start_ts);
-
-    // Resolve hostname
-    const hints: std.c.addrinfo = .{
-        .flags = .{},
-        .family = std.c.AF.UNSPEC,
-        .socktype = std.c.SOCK.STREAM,
-        .protocol = 0,
-        .addrlen = 0,
-        .canonname = null,
-        .addr = null,
-        .next = null,
-    };
-    var addr_result: ?*std.c.addrinfo = null;
-    if (std.c.getaddrinfo(host_z, port_str, &hints, &addr_result) != @as(std.c.EAI, @enumFromInt(0))) return;
-    defer std.c.freeaddrinfo(addr_result.?);
-
-    const ai = addr_result.?;
-
-    // Create socket
-    const sock = std.c.socket(
-        @intCast(ai.family),
-        @intCast(ai.socktype),
-        @intCast(ai.protocol),
-    );
-    if (sock < 0) return;
-    defer _ = std.c.close(sock);
-
-    // Set non-blocking for timeout control
-    const flags = std.c.fcntl(sock, std.c.F.GETFL, @as(c_int, 0));
-    if (flags >= 0) {
-        const nonblocking: std.c.O = .{ .NONBLOCK = true };
-        _ = std.c.fcntl(sock, std.c.F.SETFL, @as(c_int, @bitCast(nonblocking)));
-    }
-
-    // Start non-blocking connect
-    _ = std.c.connect(sock, ai.addr.?, ai.addrlen);
-
-    // Poll for connect completion with timeout
-    var pfd: [1]std.c.pollfd = .{.{
-        .fd = sock,
-        .events = std.c.POLL.OUT,
-        .revents = 0,
-    }};
-    const timeout_ms: c_int = @intCast(PROBE_TIMEOUT_S * 1000);
-    const poll_rc = std.c.poll(&pfd, 1, timeout_ms);
-    if (poll_rc <= 0) return; // timeout or error
-
-    // Check for connection error
-    var err_code: u32 = 0;
-    var err_len: std.c.socklen_t = @sizeOf(u32);
-    if (std.c.getsockopt(sock, std.c.SOL.SOCKET, std.c.SO.ERROR, &err_code, &err_len) < 0) return;
-    if (err_code != 0) return;
-
-    // Success — calculate elapsed time
-    var end_ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &end_ts);
-
-    const elapsed_ns: i96 = (end_ts.sec - start_ts.sec) * 1_000_000_000 + (end_ts.nsec - start_ts.nsec);
-    if (elapsed_ns <= 0 or elapsed_ns > PROBE_TIMEOUT_S * std.time.ns_per_s) return;
-
-    ctx.result.* = .{
-        .url = ctx.url,
-        .latency_ns = @intCast(elapsed_ns),
-    };
-}
-
-/// ============================================================
-/// Windows fallback — std.http.Client per thread
-/// ============================================================
-fn probeThreadMainWindows(ctx: *ProbeThreadContext) void {
-    defer _ = ctx.done.fetchAdd(1, .monotonic);
-
-    const io = ctx.io orelse return;
-    const environ_map = ctx.environ_map orelse return;
-
-    var client: std.http.Client = .{ .allocator = ctx.allocator, .io = io };
-    defer client.deinit();
-    if (ctx.proxy.len > 0) {
-        proxy_tunnel.setProxyFromUrl(&client, ctx.allocator, ctx.proxy) catch {};
+fn setupClient(client: *std.http.Client, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, proxy: []const u8) void {
+    if (proxy.len > 0) {
+        proxy_tunnel.setProxyFromUrl(client, allocator, proxy) catch {};
     } else {
-        client.initDefaultProxies(ctx.allocator, environ_map) catch {};
+        client.initDefaultProxies(allocator, environ_map) catch {};
     }
+}
 
-    const uri = std.Uri.parse(ctx.url) catch return;
-    var req = client.request(.HEAD, uri, .{
-        .redirect_behavior = .init(3),
-    }) catch return;
+/// Measure latency via HTTP HEAD (DNS + TCP + TLS + response).
+fn measureLatency(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.Environ.Map, url: []const u8, proxy: []const u8) ?u64 {
+    var client: std.http.Client = .{ .allocator = allocator, .io = io };
+    defer client.deinit();
+    setupClient(&client, allocator, environ_map, proxy);
+
+    const uri = std.Uri.parse(url) catch return null;
+    const start = std.Io.Timestamp.now(io, .awake);
+
+    var req = client.request(.HEAD, uri, .{ .redirect_behavior = .init(3) }) catch return null;
     defer req.deinit();
+    req.sendBodiless() catch return null;
+
+    var head_buf: [4096]u8 = undefined;
+    var response = req.receiveHead(&head_buf) catch return null;
+
+    const end = std.Io.Timestamp.now(io, .awake);
+    if (response.head.status.class() != .success) return null;
+
+    const elapsed: u64 = @intCast(std.Io.Timestamp.durationTo(start, end).nanoseconds);
+    return if (elapsed > 0) elapsed else null;
+}
+
+/// Measure throughput by downloading data for up to 5 seconds.
+/// Uses the same I/O path as the real download (stream to a file writer),
+/// but writes to NUL (/dev/null) so no data is stored on disk.
+/// Returns bytes per second, or null on failure.
+fn measureBandwidth(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.Environ.Map, url: []const u8, proxy: []const u8) ?u64 {
+    var client: std.http.Client = .{ .allocator = allocator, .io = io };
+    defer client.deinit();
+    setupClient(&client, allocator, environ_map, proxy);
+
+    const uri = std.Uri.parse(url) catch return null;
+
+    // Open null device — discards all written data, no disk I/O
+    const null_path: []const u8 = if (builtin.os.tag == .windows) "NUL" else "/dev/null";
+    const null_file = std.Io.Dir.cwd().createFile(io, null_path, .{}) catch return null;
+    defer null_file.close(io);
 
     const start = std.Io.Timestamp.now(io, .awake);
-    req.sendBodiless() catch return;
 
-    var buf: [4096]u8 = undefined;
-    const response = req.receiveHead(&buf) catch return;
-    const end = std.Io.Timestamp.now(io, .awake);
+    // Send GET request
+    var req = client.request(.GET, uri, .{ .redirect_behavior = .init(3) }) catch return null;
+    defer req.deinit();
+    req.sendBodiless() catch return null;
 
-    const elapsed_ns = std.Io.Timestamp.durationTo(start, end).nanoseconds;
-    if (elapsed_ns > PROBE_TIMEOUT_S * std.time.ns_per_s) return;
-    if (response.head.status.class() != .success) return;
+    // Receive response head
+    var head_buf: [4096]u8 = undefined;
+    var response = req.receiveHead(&head_buf) catch return null;
+    if (response.head.status.class() != .success) return null;
 
-    ctx.result.* = .{
-        .url = ctx.url,
-        .latency_ns = @intCast(elapsed_ns),
-    };
-}
+    // Stream body to null device — same pattern as the real download (streamBodyToFile).
+    // 64KB chunk limit matches the real download. Writer buffer is flushed to NUL
+    // when full, so we can keep reading indefinitely.
+    var reader_buf: [16384]u8 = undefined;
+    const body_reader = response.reader(&reader_buf);
+    var file_buf: [16384]u8 = undefined;
+    var file_writer = null_file.writer(io, &file_buf);
 
-/// ============================================================
-/// Platform-dispatched probe thread entry point
-/// ============================================================
-fn probeThreadMain(ctx: *ProbeThreadContext) void {
-    switch (native_os) {
-        .windows => probeThreadMainWindows(ctx),
-        else => probeThreadMainPosix(ctx),
+    const max_ns: u64 = 5 * std.time.ns_per_s;
+    var total_read: u64 = 0;
+    while (true) {
+        const now = std.Io.Timestamp.now(io, .awake);
+        const elapsed_ns: u64 = @intCast(std.Io.Timestamp.durationTo(start, now).nanoseconds);
+        if (elapsed_ns >= max_ns) break;
+
+        const n = body_reader.stream(&file_writer.interface, .limited(64 * 1024)) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => break,
+        };
+        if (n == 0) {
+            file_writer.interface.flush() catch break;
+            continue;
+        }
+        total_read += n;
     }
+    file_writer.interface.flush() catch {};
+
+    if (total_read == 0) return null;
+
+    const end = std.Io.Timestamp.now(io, .awake);
+    const final_ns: u64 = @intCast(std.Io.Timestamp.durationTo(start, end).nanoseconds);
+    if (final_ns == 0) return null;
+
+    return @intFromFloat(@as(f64, @floatFromInt(total_read)) / (@as(f64, @floatFromInt(final_ns)) / 1_000_000_000.0));
 }
 
 /// ============================================================
 /// Public API
 /// ============================================================
-/// Probe all candidate URLs concurrently using real OS threads.
+/// Probe all candidate URLs sequentially.
+/// For each mirror, measures latency (HEAD) and throughput (5-second download),
+/// displaying results immediately to the terminal.
 pub fn probeAll(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -252,104 +151,88 @@ pub fn probeAll(
     }
 
     const total = all_urls.items.len;
-    var done = std.atomic.Value(usize).init(0);
-    var time_buf: [64]u8 = undefined;
+    var latency_buf: [64]u8 = undefined;
+    var speed_buf: [64]u8 = undefined;
 
-    // Capture start time (POSIX: clock_gettime, Windows: zero — ticker is skipped)
-    const start_ns: i96 = if (native_os == .windows) 0 else ns: {
-        var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(.MONOTONIC, &ts);
-        break :ns @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
-    };
-
-    // Spawn background ticker thread for dynamic progress display (POSIX only)
-    var ticker_ctx: TickerContext = .{
-        .total = total,
-        .done = &done,
-        .start_ns = start_ns,
-        .stop = std.atomic.Value(bool).init(false),
-    };
-    const ticker = if (progress_writer != null and native_os != .windows)
-        std.Thread.spawn(.{}, tickerThread, .{&ticker_ctx}) catch null
-    else
-        null;
-    defer {
-        ticker_ctx.stop.store(true, .release);
-        if (ticker) |t| t.join();
+    if (progress_writer) |pw| {
+        try pw.print("  Probing {d} source(s):\n", .{total});
+        try pw.flush();
     }
 
-    // Allocate results and thread contexts
-    var results = try allocator.alloc(?ProbeResult, total);
-    defer allocator.free(results);
-    @memset(results, null);
+    for (all_urls.items, 0..) |url, idx| {
+        // Display: "  Testing: mirror_name ..."
+        if (progress_writer) |pw| {
+            try pw.print("  Testing: {s} ...", .{shortUrl(url)});
+            try pw.flush();
+        }
 
-    var contexts = try allocator.alloc(ProbeThreadContext, total);
-    defer allocator.free(contexts);
+        // Phase 1: Measure latency (HTTP HEAD)
+        const latency = measureLatency(allocator, io, environ_map, url, proxy);
 
-    ticker_ctx.current_url = all_urls.items[0];
+        // Phase 2: Measure bandwidth (HTTP GET, 5-second download)
+        const bandwidth = measureBandwidth(allocator, io, environ_map, url, proxy);
 
-    for (0..total) |i| {
-        contexts[i] = .{
-            .allocator = allocator,
-            .url = all_urls.items[i],
-            .result = &results[i],
-            .done = &done,
-            // Windows fallback fields
-            .io = io,
-            .environ_map = environ_map,
-            .proxy = proxy,
-        };
-    }
+        // Display result and add to candidates
+        if (progress_writer) |pw| {
+            const lat_str = if (latency) |lat| formatLatency(&latency_buf, lat) else "timeout";
+            if (bandwidth) |bw| {
+                const spd_str = formatThroughput(&speed_buf, bw);
+                try pw.print("\r  {d:>3}. {s:<32} latency: {s:<10} speed: {s}/s\n", .{
+                    idx + 1, shortUrl(url), lat_str, spd_str,
+                });
+            } else {
+                try pw.print("\r  {d:>3}. {s:<32} latency: {s:<10} speed: timeout\n", .{
+                    idx + 1, shortUrl(url), lat_str,
+                });
+            }
+            try pw.flush();
+        }
 
-    // Spawn one OS thread per probe — guaranteed true parallelism
-    var threads = try allocator.alloc(?std.Thread, total);
-    defer allocator.free(threads);
-    @memset(threads, null);
-
-    for (0..total) |i| {
-        threads[i] = std.Thread.spawn(.{}, probeThreadMain, .{&contexts[i]}) catch null;
-    }
-
-    // Wait for all probe threads to complete
-    for (0..total) |i| {
-        if (threads[i]) |t| t.join();
-    }
-
-    // Collect successful results
-    for (results) |res| {
-        if (res) |r| {
+        if (bandwidth) |bw| {
             try candidates.append(allocator, .{
-                .url = r.url,
-                .latency_ns = r.latency_ns,
+                .url = url,
+                .latency_ns = latency orelse 0,
+                .bandwidth_bps = bw,
                 .owned = true,
             });
+            // Mark URL as transferred to candidates
             for (all_urls.items) |*u| {
-                if (u.*.ptr == r.url.ptr) {
+                if (u.*.ptr == url.ptr) {
                     u.* = "";
                     break;
                 }
             }
         }
     }
-
-    if (progress_writer) |pw| {
-        if (native_os == .windows) {
-            try pw.print("\x1b[2K\r  Probing: done ({d} sources)\n", .{total});
-        } else {
-            var end_ts: std.c.timespec = undefined;
-            _ = std.c.clock_gettime(.MONOTONIC, &end_ts);
-            const end_ns: i96 = @as(i96, end_ts.sec) * 1_000_000_000 + end_ts.nsec;
-            const elapsed_ns: u64 = if (end_ns > start_ns) @intCast(end_ns - start_ns) else 0;
-            const elapsed_str = formatLatency(&time_buf, elapsed_ns);
-            try pw.print("\x1b[2K\r  Probing: done ({d} sources, {s})\n", .{ total, elapsed_str });
-        }
-        try pw.flush();
-    }
 }
 
-/// Compare two MirrorCandidates by latency (for sorting).
-pub fn lessThanByLatency(_: void, a: MirrorCandidate, b: MirrorCandidate) bool {
-    return a.latency_ns < b.latency_ns;
+/// Compare two MirrorCandidates by bandwidth (for sorting).
+/// Higher bandwidth_bps = faster mirror. Failed probes (bandwidth_bps == 0) sort last.
+/// When bandwidth difference is <10%, lower latency wins as tiebreaker.
+pub fn greaterThanByBandwidth(_: void, a: MirrorCandidate, b: MirrorCandidate) bool {
+    // Failed bandwidth probes sort last
+    if (a.bandwidth_bps == 0) return false;
+    if (b.bandwidth_bps == 0) return true;
+
+    // If bandwidth difference < 10%, use latency as tiebreaker
+    const max_bps = @max(a.bandwidth_bps, b.bandwidth_bps);
+    const diff = if (a.bandwidth_bps > b.bandwidth_bps)
+        a.bandwidth_bps - b.bandwidth_bps
+    else
+        b.bandwidth_bps - a.bandwidth_bps;
+
+    if (diff * 10 < max_bps) {
+        // Both failed latency → order doesn't matter
+        if (a.latency_ns == 0 and b.latency_ns == 0) return false;
+        // One failed latency → sort last
+        if (a.latency_ns == 0) return false;
+        if (b.latency_ns == 0) return true;
+        // Lower latency = better
+        return a.latency_ns < b.latency_ns;
+    }
+
+    // Higher bandwidth = better
+    return a.bandwidth_bps > b.bandwidth_bps;
 }
 
 /// Format nanoseconds as a human-readable string (e.g., "123ms", "1.2s").
@@ -362,6 +245,28 @@ pub fn formatLatency(buf: []u8, ns: u64) []const u8 {
         return std.fmt.bufPrint(buf, "{d:.0}ms", .{@as(f64, @floatFromInt(ns)) / 1_000_000.0}) catch "?";
     } else {
         return std.fmt.bufPrint(buf, "{d:.1}s", .{@as(f64, @floatFromInt(ns)) / 1_000_000_000.0}) catch "?";
+    }
+}
+
+/// Format throughput from bytes per second as "X.YMB" etc.
+pub fn formatThroughput(buf: []u8, bps: u64) []const u8 {
+    if (bps == 0) return "?B";
+    return formatBytes(buf, bps);
+}
+
+/// Format bytes as a human-readable string (e.g., "427.0KB", "1.2MB").
+fn formatBytes(buf: []u8, bytes: u64) []const u8 {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if (bytes < KB) {
+        return std.fmt.bufPrint(buf, "{d}B", .{bytes}) catch "?";
+    } else if (bytes < MB) {
+        return std.fmt.bufPrint(buf, "{d:.1}KB", .{@as(f64, @floatFromInt(bytes)) / @as(f64, @floatFromInt(KB))}) catch "?";
+    } else if (bytes < GB) {
+        return std.fmt.bufPrint(buf, "{d:.1}MB", .{@as(f64, @floatFromInt(bytes)) / @as(f64, @floatFromInt(MB))}) catch "?";
+    } else {
+        return std.fmt.bufPrint(buf, "{d:.2}GB", .{@as(f64, @floatFromInt(bytes)) / @as(f64, @floatFromInt(GB))}) catch "?";
     }
 }
 

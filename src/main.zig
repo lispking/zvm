@@ -6,6 +6,8 @@
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
+/// Current version of zvm, injected at build time from git tag or -Dversion=.
+const VERSION = build_options.version;
 
 const cli = @import("cli.zig");
 const Console = @import("core/Console.zig");
@@ -13,9 +15,6 @@ const errors = @import("core/errors.zig");
 const platform = @import("core/platform.zig");
 const update_check = @import("core/update_check.zig");
 const zvm_mod = @import("core/zvm.zig");
-
-/// Current version of zvm, injected at build time from git tag or -Dversion=.
-const VERSION = build_options.version;
 
 /// Full version string with 'v' prefix and git commit hash.
 fn fullVersion() []const u8 {
@@ -127,6 +126,10 @@ pub fn main(init: std.process.Init) !void {
         .proxy => |proxy_cmd| {
             const proxy_mod = @import("command/proxy.zig");
             proxy_mod.run(&zvm, allocator, proxy_cmd.url, console) catch |err| commandFail(console, err);
+        },
+        .probe => {
+            const probe = @import("command/probe.zig");
+            probe.run(&zvm, allocator, console) catch |err| commandFail(console, err);
         },
         .completion => |comp_cmd| {
             const completion = @import("completion.zig");

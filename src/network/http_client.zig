@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
 const settings_mod = @import("../core/settings.zig");
 const mirror_probe = @import("mirror_probe.zig");
 const proxy_tunnel = @import("proxy_tunnel.zig");
@@ -305,12 +306,13 @@ pub fn attemptMirrorDownload(
     verbose_writer: ?*std.Io.Writer,
     progress_writer: ?*std.Io.Writer,
     settings: *settings_mod.Settings,
+    force_probe: bool,
 ) ![]const u8 {
     // Extract filename once (used for constructing mirror URLs and extracting base URL)
     const filename = if (std.mem.lastIndexOfScalar(u8, original_url, '/')) |idx| original_url[idx + 1 ..] else original_url;
 
     // --- Cache-fast path: try cached mirror if fresh ---
-    if (settings.preferred_mirror.len > 0 and settings.mirror_updated_at > 0) {
+    if (!force_probe and settings.preferred_mirror.len > 0 and settings.mirror_updated_at > 0) {
         const now = std.Io.Clock.Timestamp.now(io, .real).raw.toSeconds();
         const age = now - settings.mirror_updated_at;
         if (age >= 0 and age < MIRROR_CACHE_TTL) {
@@ -388,7 +390,7 @@ fn probeAndDownload(
     var candidates: std.ArrayList(mirror_probe.MirrorCandidate) = .empty;
     defer candidates.deinit(allocator);
 
-    // Probe all candidates concurrently
+    // Probe all candidates sequentially
     try mirror_probe.probeAll(allocator, io, environ_map, original_url, &mirrors, filename, proxy, &candidates, progress_writer);
 
     // If no candidates responded, fall back to the original URL
@@ -397,23 +399,21 @@ fn probeAndDownload(
         return allocator.dupe(u8, original_url);
     }
 
-    // Sort candidates by latency (fastest first)
-    std.mem.sort(mirror_probe.MirrorCandidate, candidates.items, {}, mirror_probe.lessThanByLatency);
+    // Sort candidates by bandwidth (fastest first)
+    std.mem.sort(mirror_probe.MirrorCandidate, candidates.items, {}, mirror_probe.greaterThanByBandwidth);
 
-    // Print latency results if verbose output is requested
+    // Show which mirror was selected
     if (verbose_writer) |vw| {
-        var time_buf: [64]u8 = undefined;
-        try vw.print("  Probed {d} source(s):\n", .{candidates.items.len});
-        for (candidates.items, 1..) |candidate, rank| {
-            const time_str = mirror_probe.formatLatency(&time_buf, candidate.latency_ns);
-            const marker = if (rank == 1) " <-- fastest" else "";
-            const short_url = mirror_probe.shortUrl(candidate.url);
-            try vw.print("    {d}. {s}  ({s}{s})\n", .{ rank, short_url, time_str, marker });
-        }
+        const best = candidates.items[0];
+        var speed_buf: [64]u8 = undefined;
+        var lat_buf: [64]u8 = undefined;
+        const spd_str = mirror_probe.formatThroughput(&speed_buf, best.bandwidth_bps);
+        const lat_str = mirror_probe.formatLatency(&lat_buf, best.latency_ns);
+        try vw.print("  Selected: {s} ({s}/s, latency: {s})\n\n", .{ mirror_probe.shortUrl(best.url), spd_str, lat_str });
         try vw.flush();
     }
 
-    // Try downloading from candidates in latency order
+    // Try downloading from candidates in bandwidth order
     for (candidates.items, 0..) |candidate, idx| {
         downloadToFileWithProxy(allocator, io, environ_map, candidate.url, dest_path, proxy, progress_writer) catch {
             continue;

@@ -4,6 +4,7 @@
 //! new commands trigger a compile error here until their metadata is added.
 
 const std = @import("std");
+
 const cli = @import("cli.zig");
 const Console = @import("core/Console.zig");
 
@@ -95,6 +96,9 @@ fn cmdMeta(cmd: cli.Command) CmdMeta {
         .proxy => .{
             .desc = "Set HTTP/HTTPS proxy for downloads",
             .arg = .url,
+        },
+        .probe => .{
+            .desc = "Test mirror speeds without installing",
         },
         .completion => .{
             .desc = "Generate shell completion script",

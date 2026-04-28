@@ -4,6 +4,7 @@
 //! and subcommands (vmu zig/zls).
 
 const std = @import("std");
+
 const errors = @import("core/errors.zig");
 
 /// Supported shell types for completion generation.
@@ -21,6 +22,7 @@ pub const Command = enum {
     vmu,
     mirrorlist,
     proxy,
+    probe,
     completion,
     version,
     help,
@@ -38,6 +40,7 @@ pub const InstallFlags = packed struct {
     zls: bool = false,
     full: bool = false,
     nomirror: bool = false,
+    reprobe: bool = false,
 };
 
 /// Flags for the list command.
@@ -83,6 +86,7 @@ pub const ParsedCommand = union(Command) {
     proxy: struct {
         url: ?[]const u8,
     },
+    probe,
     completion: struct {
         shell: ShellType,
     },
@@ -112,6 +116,7 @@ const command_aliases = std.StaticStringMap(Command).initComptime(.{
     .{ "vmu", .vmu },
     .{ "mirrorlist", .mirrorlist },
     .{ "proxy", .proxy },
+    .{ "probe", .probe },
     .{ "completion", .completion },
     .{ "version", .version },
     .{ "help", .help },
@@ -177,6 +182,7 @@ pub fn parse(allocator: std.mem.Allocator, init: std.process.Init.Minimal) !stru
         .vmu => try parseVmu(allocator, &args),
         .mirrorlist => try parseMirrorlist(allocator, &args),
         .proxy => try parseProxy(allocator, &args),
+        .probe => parseProbe(&args),
         .completion => try parseCompletion(&args),
         .version => ParsedCommand.version,
         .help => ParsedCommand{ .help = null },
@@ -224,6 +230,8 @@ fn parseInstall(allocator: std.mem.Allocator, args: anytype) !ParsedCommand {
             flags.full = true;
         } else if (std.mem.eql(u8, arg, "--nomirror")) {
             flags.nomirror = true;
+        } else if (std.mem.eql(u8, arg, "--test") or std.mem.eql(u8, arg, "-t")) {
+            flags.reprobe = true;
         } else {
             version = try allocator.dupe(u8, arg);
         }
@@ -330,6 +338,13 @@ fn parseProxy(allocator: std.mem.Allocator, args: anytype) !ParsedCommand {
     return .{ .proxy = .{ .url = null } };
 }
 
+fn parseProbe(args: anytype) ParsedCommand {
+    if (args.next()) |arg| {
+        if (checkHelp(.probe, arg)) |h| return h;
+    }
+    return ParsedCommand.probe;
+}
+
 fn parseCompletion(args: anytype) !ParsedCommand {
     const shell_str = args.next() orelse return error.MissingArgument;
     if (checkHelp(.completion, shell_str)) |h| return h;
@@ -361,6 +376,7 @@ pub fn printHelp(writer: *std.Io.Writer) !void {
         \\  vmu               Set version map source (zig/zls)
         \\  mirrorlist        Set mirror distribution server
         \\  proxy             Set HTTP/HTTPS proxy for downloads
+        \\  probe             Test mirror speeds without installing
         \\  completion        Generate shell completion script
         \\  version           Print zvm version
         \\  help              Print this help message
@@ -389,6 +405,7 @@ pub fn printCommandHelp(writer: *std.Io.Writer, cmd: Command) !void {
             \\  --zls         Also install ZLS (Zig Language Server)
             \\  --full        Install ZLS with full compatibility mode
             \\  --nomirror    Skip community mirror downloads
+            \\  --test, -t    Force re-probe mirrors (ignore cache)
             \\
             \\Examples:
             \\  zvm install master     Install latest nightly
@@ -486,6 +503,16 @@ pub fn printCommandHelp(writer: *std.Io.Writer, cmd: Command) !void {
             \\  zvm proxy socks5://127.0.0.1:1080   Set SOCKS5 proxy
             \\  zvm proxy default                   Clear proxy (auto-detect from env)
             \\  zvm proxy                           Show current proxy setting
+            \\
+        ),
+        .probe => try writer.writeAll(
+            \\Test mirror download speeds without installing anything.
+            \\
+            \\Downloads data from each mirror for 5 seconds and measures
+            \\throughput. Results are displayed in real-time.
+            \\
+            \\Usage:
+            \\  zvm probe
             \\
         ),
         .completion => try writer.writeAll(
