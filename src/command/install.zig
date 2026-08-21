@@ -375,15 +375,17 @@ fn installZls(
 
     // Query ZLS select-version API with the Zig version and compatibility mode
     const compat_mode = if (full_compat) "full" else "only-runtime";
+    const encoded_version = try percentEncodeQueryParam(allocator, zig_version);
+    defer allocator.free(encoded_version);
     const zls_url = try std.fmt.allocPrint(
         allocator,
         "{s}v1/zls/select-version?zig_version={s}&compatibility={s}",
-        .{ zvm.settings.zls_vmu, zig_version, compat_mode },
+        .{ zvm.settings.zls_vmu, encoded_version, compat_mode },
     );
     defer allocator.free(zls_url);
 
-    const zls_response = http_client.downloadToMemoryWithProxy(allocator, zvm.io, zvm.environ_map, zls_url, zvm.settings.proxy) catch {
-        console.err("Failed to query ZLS version", .{});
+    const zls_response = http_client.downloadToMemoryWithProxy(allocator, zvm.io, zvm.environ_map, zls_url, zvm.settings.proxy) catch |err| {
+        console.err("Failed to query ZLS version ({s}): {s}", .{ @errorName(err), zls_url });
         return;
     };
     defer allocator.free(zls_response);
@@ -533,4 +535,22 @@ fn deleteLegacyZlsWithoutExtension(zvm: *zvm_mod.ZVM, version: []const u8, zls_e
     var legacy_dst_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
     const legacy_dst = std.fmt.bufPrint(&legacy_dst_buf, "{s}/{s}/zls", .{ zvm.data_dir, version }) catch return;
     std.Io.Dir.cwd().deleteFile(zvm.io, legacy_dst) catch {};
+}
+
+/// Percent-encode a string for safe use as a URL query parameter value.
+/// Only RFC 3986 unreserved characters are left unescaped. Required because
+/// nightly Zig versions contain a '+' git-hash separator (e.g.
+/// "0.15.0-dev.1234+2f87b564c"), which is not valid in a raw query string.
+fn percentEncodeQueryParam(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    const hex_digits = "0123456789ABCDEF";
+    var out: std.ArrayList(u8) = .empty;
+    for (value) |c| {
+        const unreserved = std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~';
+        if (unreserved) {
+            try out.append(allocator, c);
+        } else {
+            try out.appendSlice(allocator, &.{ '%', hex_digits[c >> 4], hex_digits[c & 0x0f] });
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
