@@ -12,12 +12,19 @@ const zvm_mod = @import("../core/zvm.zig");
 pub fn run(
     zvm: *zvm_mod.ZVM,
     allocator: std.mem.Allocator,
-    version: []const u8,
+    io: std.Io,
+    version_: ?[]const u8,
     flags: anytype,
     console: Console,
 ) !void {
-    _ = allocator;
     _ = flags;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const version = version_ orelse praseFromZon(arena.allocator(), io) catch {
+        console.err("Field 'minimum_zig_version' was not found in build.zig.zon.", .{});
+        return;
+    };
 
     if (!zvm.isVersionInstalled(version)) {
         console.plain("Zig {s} is not installed. Run 'zvm install {s}' first.", .{ version, version });
@@ -40,4 +47,25 @@ pub fn run(
             console.warn("Failed to update PATH ({s}). Please add {s} to your PATH manually.", .{ @errorName(err), bin_path });
         }
     }
+}
+
+fn praseFromZon(arena: std.mem.Allocator, io: std.Io) ![]const u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, "build.zig.zon", .{});
+    defer file.close(io);
+
+    var buffer: [1024]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+
+    const zon_txt = try reader.interface.readAlloc(arena, try reader.getSize());
+    var diag = std.zon.parse.Diagnostics{};
+    const zon = try std.zon.parse.fromSliceAlloc(
+        struct { minimum_zig_version: [:0]const u8 },
+        arena,
+        @ptrCast(zon_txt),
+        &diag,
+        .{
+            .ignore_unknown_fields = true,
+        },
+    );
+    return zon.minimum_zig_version;
 }

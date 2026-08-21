@@ -89,11 +89,12 @@ pub fn main(init: std.process.Init) !void {
         },
         .use => |use_cmd| {
             const use_mod = @import("command/use.zig");
-            const ver = use_cmd.version orelse {
+            const ver: ?[]const u8 = use_cmd.version orelse blk: {
+                if (use_cmd.flags.sync) break :blk null;
                 console.err("No version specified. Use 'zvm use <version>'", .{});
                 std.process.exit(1);
             };
-            use_mod.run(&zvm, allocator, ver, use_cmd.flags, console) catch |err| commandFail(console, err);
+            use_mod.run(&zvm, allocator, init.io, ver, use_cmd.flags, console) catch |err| commandFail(console, err);
         },
         .list => |list_cmd| {
             const list = @import("command/list.zig");
